@@ -1,5 +1,5 @@
 // ─── HighLevel OAuth ─────────────────────────────────────────────────────────
-export { highlevelOAuthCallback } from './highlevel/oauth'
+export { hlOAuthCallback } from './highlevel/oauth'
 
 // ─── Projects ────────────────────────────────────────────────────────────────
 export { listProjects, createProject, updateProject, deleteProject } from './projects'

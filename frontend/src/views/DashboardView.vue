@@ -128,7 +128,7 @@ function openProject(id: string) {
           <h1 class="text-2xl font-bold">Projects</h1>
           <p class="text-sm text-muted-foreground mt-1">Build AI-powered HighLevel applications</p>
         </div>
-        <Button @click="showCreateDialog = true" :disabled="!hlStore.isConnected">
+        <Button @click="showCreateDialog = true" :disabled="hlStore.isConnected">
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path
               stroke-linecap="round"
@@ -174,7 +174,7 @@ function openProject(id: string) {
               : 'Connect HighLevel first to get started'
           }}
         </p>
-        <Button size="sm" @click="showCreateDialog = true" :disabled="!hlStore.isConnected">
+        <Button size="sm" @click="showCreateDialog = true" :disabled="hlStore.isConnected">
           Create Project
         </Button>
       </div>

@@ -16,11 +16,11 @@
 1. Go to [developers.gohighlevel.com](https://developers.gohighlevel.com) → create a Marketplace App
 2. Set OAuth Redirect URI to:
    ```
-   https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/highlevelOAuthCallback
+   https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/hlOAuthCallback
    ```
    For local dev:
    ```
-   http://localhost:5001/YOUR_PROJECT_ID/us-central1/highlevelOAuthCallback
+   http://localhost:5001/YOUR_PROJECT_ID/us-central1/hlOAuthCallback
    ```
 3. Enable scopes: `contacts.readonly`, `contacts.write`, `conversations.readonly`, `conversations.write`, `calendars.readonly`, `calendars/events.readonly`
 4. Create a Sandbox account from your developer dashboard for safe testing

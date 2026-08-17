@@ -6,10 +6,7 @@ import { verifyAuth } from '../auth/middleware'
 import { buildSystemPrompt } from './prompt'
 import { parseLLMResponse } from './parser'
 import { createSnapshot } from '../snapshots'
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-})
+import { InferenceClient } from '@huggingface/inference'
 
 // SSE helper
 function sendSSE(res: functions.Response, event: string, data: unknown) {
@@ -26,6 +23,8 @@ export const generateStream = functions
       res.status(204).send('')
       return
     }
+
+    console.log('Received generateStream request:', req.query)
 
     // Set SSE headers
     res.set({
@@ -65,12 +64,12 @@ export const generateStream = functions
       const project = projSnap.data()!
 
       // ── Load HL connection ────────────────────────────────────────────────
-      const connSnap = await db.collection('highlevelConnections').doc(uid).get()
-      if (!connSnap.exists) {
-        sendSSE(res, 'error', { type: 'error', message: 'HighLevel not connected' })
-        res.end()
-        return
-      }
+      // const connSnap = await db.collection('highlevelConnections').doc(uid).get()
+      // if (!connSnap.exists) {
+      //   sendSSE(res, 'error', { type: 'error', message: 'HighLevel not connected' })
+      //   res.end()
+      //   return
+      // }
 
       // ── Load existing files ───────────────────────────────────────────────
       sendSSE(res, 'status', { type: 'status', message: 'Gathering project files...' })
@@ -106,18 +105,54 @@ export const generateStream = functions
 
       let fullResponse = ''
 
-      const stream = anthropic.messages.stream({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 8192,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: prompt }]
-      })
+      if(process.env.USE_HUGGINGFACE === 'true') {
+        
 
-      for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-          const text = chunk.delta.text
-          fullResponse += text
-          sendSSE(res, 'token', { type: 'token', text })
+        // Use your HF token; this client talks to the new router (OpenAI-compatible)
+        const hf = new InferenceClient(process.env.HF_TOKEN!)
+
+        const stream = hf.chatCompletionStream({
+          model: 'Qwen/Qwen2.5-Coder-7B-Instruct',
+          max_tokens: 4096,
+          temperature: 0.7,
+          top_p: 0.95,
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ]
+        })
+
+        for await (const chunk of stream) {
+          const delta = chunk.choices?.[0]?.delta?.content ?? ''
+          if (delta) {
+            fullResponse += delta
+            sendSSE(res, 'token', { type: 'token', text: delta })
+          }
+        }
+      }else {
+        const anthropic = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY
+        })
+
+        const stream = anthropic.messages.stream({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 8192,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: prompt }]
+        })
+
+        for await (const chunk of stream) {
+          if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+            const text = chunk.delta.text
+            fullResponse += text
+            sendSSE(res, 'token', { type: 'token', text })
+          }
         }
       }
 
