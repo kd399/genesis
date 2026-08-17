@@ -1,0 +1,21 @@
+{
+  "name": "genesis",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "functions"
+  ],
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "emulators": "firebase emulators:start",
+    "deploy": "firebase deploy"
+  },
+  "devDependencies": {
+    "@prettier/plugin-xml": "^3.4.2",
+    "prettier": "^3.9.6"
+  },
+  "dependencies": {
+    "firebase-functions": "^7.3.2"
+  }
+}

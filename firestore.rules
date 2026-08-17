@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only access their own user document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // HighLevel connections scoped to the authenticated user
+    match /highlevelConnections/{connectionId} {
+      // Allow reads for authenticated users; if the document exists
+      // require the stored userId to match. This prevents snapshot
+      // listeners from throwing when the doc doesn't exist yet.
+      allow read, write: if request.auth != null
+        && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Projects strictly scoped to the authenticated user
+    match /projects/{projectId} {
+      // Permit listening to project documents even if they don't exist
+      // yet; if the document exists, enforce ownership.
+      allow read, write: if request.auth != null
+        && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+
+      // Files under a project
+      match /files/{fileId} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/projects/$(projectId)).exists()
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+      }
+
+      // Snapshots under a project
+      match /snapshots/{snapshotId} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/projects/$(projectId)).exists()
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+      }
+
+      // Messages under a project
+      match /messages/{messageId} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/projects/$(projectId)).exists()
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid;
+      }
+    }
+  }
+}
