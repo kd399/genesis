@@ -163,7 +163,7 @@ onUnmounted(() => {
       <!-- Main workspace — 3 panels -->
       <div class="flex-1 flex overflow-hidden">
         <!-- Chat panel -->
-        <div v-if="showChat" class="w-64 xl:w-72 border-r flex flex-col shrink-0 overflow-hidden">
+        <div v-if="showChat" class="w-72 xl:w-80 border-r flex flex-col shrink-0 overflow-hidden">
           <ChatPanel />
         </div>
 
@@ -183,7 +183,7 @@ onUnmounted(() => {
         <!-- Preview panel -->
         <div
           v-if="showPreview"
-          class="w-96 xl:w-[480px] border-l flex flex-col shrink-0 overflow-hidden"
+          class="w-[380px] xl:w-[440px] border-l flex flex-col shrink-0 overflow-hidden"
         >
           <PreviewPanel />
         </div>

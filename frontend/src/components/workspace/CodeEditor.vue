@@ -16,13 +16,23 @@ watch(
   }
 )
 
-// During generation, show stream buffer
-const editorContent = computed(() => {
-  if (ws.generationState.isGenerating && ws.streamBuffer) {
-    return ws.streamBuffer
+// During generation, new files appear in file tree — auto-open them as tabs
+watch(
+  () => ws.files.map(f => f.path),
+  paths => {
+    // Add new file paths that appeared during generation
+    paths.forEach(p => {
+      if (!openTabs.value.includes(p)) {
+        openTabs.value.push(p)
+      }
+    })
   }
-  return ws.activeFile?.content ?? ''
-})
+)
+
+const isGenerating = computed(() => ws.generationState.isGenerating)
+
+// Use the store's computed editor content (handles streaming)
+const editorContent = computed(() => ws.editorContent)
 
 const editorLanguage = computed(() => {
   const path = ws.activeFilePath ?? ''
@@ -39,7 +49,8 @@ const editorLanguage = computed(() => {
   return langMap[ext ?? ''] ?? 'plaintext'
 })
 
-const isReadOnly = computed(() => ws.generationState.isGenerating)
+// Read-only while streaming
+const isReadOnly = computed(() => isGenerating.value)
 
 function closeTab(path: string, e: MouseEvent) {
   e.stopPropagation()
@@ -50,13 +61,36 @@ function closeTab(path: string, e: MouseEvent) {
   }
 }
 
+let saveTimeout: ReturnType<typeof setTimeout> | null = null
 async function handleChange(value: string | undefined) {
-  if (!value || !ws.activeFilePath || ws.generationState.isGenerating) return
-  await ws.saveFile(ws.activeFilePath, value)
+  if (!value || !ws.activeFilePath || isGenerating.value) return
+  // Debounce saves by 800ms
+  if (saveTimeout) clearTimeout(saveTimeout)
+  saveTimeout = setTimeout(() => {
+    ws.saveFile(ws.activeFilePath!, value)
+  }, 800)
 }
 
 function getTabName(path: string) {
   return path.split('/').pop() ?? path
+}
+
+function getTabIcon(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase()
+  switch (ext) {
+    case 'html':
+      return '🌐'
+    case 'js':
+      return '⚡'
+    case 'css':
+      return '🎨'
+    case 'json':
+      return '📋'
+    case 'ts':
+      return '🔷'
+    default:
+      return '📄'
+  }
 }
 </script>
 
@@ -64,23 +98,30 @@ function getTabName(path: string) {
   <div class="flex flex-col h-full">
     <!-- Tabs bar -->
     <div
-      class="flex items-center border-b bg-muted/30 overflow-x-auto shrink-0"
+      class="flex items-center border-b bg-muted/30 overflow-x-auto shrink-0 scrollbar-thin"
       style="height: 36px"
     >
       <div
         v-for="tab in openTabs"
         :key="tab"
         :class="[
-          'flex items-center gap-1.5 px-3 h-full text-xs border-r cursor-pointer shrink-0 transition-colors',
+          'group flex items-center gap-1.5 px-3 h-full text-xs border-r cursor-pointer shrink-0 transition-colors',
           ws.activeFilePath === tab
-            ? 'bg-background text-foreground font-medium'
+            ? 'bg-background text-foreground font-medium border-t-2 border-t-primary'
             : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
         ]"
         @click="ws.selectFile(tab)"
       >
-        <span>{{ getTabName(tab) }}</span>
+        <span class="text-[10px]">{{ getTabIcon(tab) }}</span>
+        <span class="max-w-[100px] truncate">{{ getTabName(tab) }}</span>
+        <!-- Streaming indicator on active streaming file -->
+        <span
+          v-if="isGenerating && ws.activeStreamFile === tab"
+          class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0"
+        />
         <button
-          class="opacity-0 hover:opacity-100 group-hover:opacity-60 ml-1 hover:text-destructive transition-opacity"
+          v-else
+          class="opacity-0 group-hover:opacity-60 ml-0.5 hover:opacity-100 hover:text-destructive transition-opacity shrink-0"
           :class="{ 'opacity-60': ws.activeFilePath === tab }"
           @click="closeTab(tab, $event)"
         >
@@ -95,13 +136,33 @@ function getTabName(path: string) {
         </button>
       </div>
 
-      <!-- Generation indicator -->
+      <!-- Generation streaming indicator -->
       <div
-        v-if="ws.generationState.isGenerating"
-        class="ml-auto px-3 flex items-center gap-1.5 text-xs text-muted-foreground"
+        v-if="isGenerating"
+        class="ml-auto px-3 flex items-center gap-1.5 text-xs text-muted-foreground shrink-0"
       >
-        <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-        Streaming...
+        <svg class="w-3 h-3 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+          <circle
+            class="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          />
+          <path
+            class="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+          />
+        </svg>
+        <span>
+          {{
+            ws.generationState.currentFile
+              ? `Writing ${ws.generationState.currentFile}…`
+              : ws.generationState.status || 'Generating…'
+          }}
+        </span>
       </div>
     </div>
 
@@ -109,12 +170,12 @@ function getTabName(path: string) {
     <div class="flex-1 relative overflow-hidden">
       <!-- Empty state -->
       <div
-        v-if="!ws.activeFilePath && !ws.generationState.isGenerating"
+        v-if="!ws.activeFilePath && !isGenerating"
         class="absolute inset-0 flex items-center justify-center text-muted-foreground"
       >
         <div class="text-center">
           <svg
-            class="w-8 h-8 mx-auto mb-2 opacity-40"
+            class="w-10 h-10 mx-auto mb-3 opacity-20"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -127,20 +188,43 @@ function getTabName(path: string) {
             />
           </svg>
           <p class="text-sm">No file selected</p>
+          <p class="text-xs mt-1 opacity-60">Click a file in the tree or generate an app</p>
         </div>
       </div>
 
-      <!-- Stream buffer view during generation -->
+      <!-- Waiting for first token during generation -->
       <div
-        v-else-if="ws.generationState.isGenerating && ws.streamBuffer"
-        class="absolute inset-0 overflow-auto bg-[#1e1e1e] p-4 font-mono text-xs text-green-400 whitespace-pre-wrap"
+        v-else-if="isGenerating && !ws.activeFilePath"
+        class="absolute inset-0 flex items-center justify-center bg-[#1e1e1e]"
       >
-        {{ ws.streamBuffer }}
+        <div class="text-center text-muted-foreground">
+          <svg
+            class="w-8 h-8 animate-spin text-primary mx-auto mb-3"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            />
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            />
+          </svg>
+          <p class="text-xs">{{ ws.generationState.status }}</p>
+        </div>
       </div>
 
-      <!-- Monaco Editor -->
+      <!-- Monaco Editor — shows streamed content in real-time via editorContent computed -->
       <vue-monaco-editor
         v-else-if="ws.activeFilePath"
+        :key="ws.activeFilePath"
         :value="editorContent"
         :language="editorLanguage"
         :read-only="isReadOnly"
@@ -156,7 +240,8 @@ function getTabName(path: string) {
           renderWhitespace: 'selection',
           smoothScrolling: true,
           cursorBlinking: 'smooth',
-          padding: { top: 12 }
+          padding: { top: 12 },
+          scrollbar: { alwaysConsumeMouseWheel: false }
         }"
         style="height: 100%"
         @change="handleChange"

@@ -20,7 +20,6 @@ const showCreateDialog = ref(false)
 onMounted(async () => {
   await hlStore.init()
   await projectsStore.fetchProjects()
-  
 })
 
 onUnmounted(() => {
@@ -94,7 +93,7 @@ function openProject(id: string) {
     <main class="max-w-6xl mx-auto px-4 py-8">
       <!-- HL Connection Banner -->
       <div
-        v-if="(!hlStore.isConnected && !hlStore.loading)"
+        v-if="!hlStore.isConnected && !hlStore.loading"
         class="mb-6 rounded-lg border border-orange-200 bg-orange-50 p-4 flex items-center justify-between"
       >
         <div>

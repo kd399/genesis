@@ -1,9 +1,16 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { collection, query, orderBy, onSnapshot, getDoc, doc } from 'firebase/firestore'
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore'
 import { getIdToken } from 'firebase/auth'
 import { db, auth } from '@/services/firebase'
-import type { ProjectFile, Message, Snapshot, GenerationState, SSEEvent } from '@/types'
+import type {
+  ProjectFile,
+  Message,
+  Snapshot,
+  GenerationState,
+  SSEEvent,
+  ChatActivity
+} from '@/types'
 
 const FUNCTIONS_BASE = import.meta.env.DEV
   ? `http://localhost:5001/${import.meta.env.VITE_FIREBASE_PROJECT_ID}/us-central1`
@@ -21,7 +28,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     status: '',
     error: null
   })
-  const streamBuffer = ref('')
+
+  // Live streaming state
+  const streamingFileContents = ref<Record<string, string>>({}) // path -> content being streamed
+  const activeStreamFile = ref<string | null>(null)
+
+  // The local "in-progress" assistant message id (shown while generating)
+  const inProgressMsgId = ref<string | null>(null)
 
   let filesUnsub: (() => void) | null = null
   let messagesUnsub: (() => void) | null = null
@@ -45,6 +58,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return tree
   })
 
+  /** The content shown in the code editor — streamed content takes priority during generation */
+  const editorContent = computed(() => {
+    if (
+      activeStreamFile.value &&
+      streamingFileContents.value[activeStreamFile.value] !== undefined
+    ) {
+      return streamingFileContents.value[activeStreamFile.value]
+    }
+    return activeFile.value?.content ?? ''
+  })
+
   async function getToken(): Promise<string> {
     if (!auth.currentUser) throw new Error('Not authenticated')
     return getIdToken(auth.currentUser)
@@ -55,7 +79,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     files.value = []
     messages.value = []
     activeFilePath.value = null
-    streamBuffer.value = ''
+    streamingFileContents.value = {}
+    activeStreamFile.value = null
 
     // Real-time files listener
     filesUnsub = onSnapshot(
@@ -74,17 +99,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
     )
 
-    // Real-time messages listener
+    // Real-time messages listener — merge with local in-progress message
     messagesUnsub = onSnapshot(
       query(collection(db, 'projects', pid, 'messages'), orderBy('createdAt', 'asc')),
       snap => {
-        messages.value = snap.docs.map(d => ({
+        const remote = snap.docs.map(d => ({
           id: d.id,
           projectId: pid,
           role: d.data().role,
           content: d.data().content,
+          activities: d.data().activities ?? undefined,
           createdAt: d.data().createdAt
-        }))
+        })) as Message[]
+
+        // Keep our local in-progress assistant message at the end while generating
+        if (inProgressMsgId.value) {
+          const inProgress = messages.value.find(m => m.id === inProgressMsgId.value)
+          const withoutInProgress = remote.filter(m => m.id !== inProgressMsgId.value)
+          messages.value = inProgress ? [...withoutInProgress, inProgress] : remote
+        } else {
+          messages.value = remote
+        }
       }
     )
 
@@ -93,12 +128,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   async function fetchSnapshots() {
     if (!projectId.value) return
-    const token = await getToken()
-    const res = await fetch(`${FUNCTIONS_BASE}/listSnapshots?projectId=${projectId.value}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    const data = await res.json()
-    snapshots.value = data.snapshots ?? []
+    try {
+      const token = await getToken()
+      const res = await fetch(`${FUNCTIONS_BASE}/listSnapshots?projectId=${projectId.value}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await res.json()
+      snapshots.value = data.snapshots ?? []
+    } catch {
+      // non-fatal
+    }
   }
 
   function selectFile(path: string) {
@@ -123,15 +162,44 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       status: 'Starting...',
       error: null
     }
-    streamBuffer.value = ''
+    streamingFileContents.value = {}
+    activeStreamFile.value = null
     abortController = new AbortController()
 
+    // 1) Add user message immediately (local + Firestore)
+    const userMsg: Message = {
+      id: `local_user_${Date.now()}`,
+      projectId: projectId.value,
+      role: 'user',
+      content: prompt,
+      createdAt: null as any
+    }
+    messages.value = [...messages.value, userMsg]
+
+    // 2) Create a local in-progress assistant message bubble
+    const assistantMsgId = `local_asst_${Date.now()}`
+    inProgressMsgId.value = assistantMsgId
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      projectId: projectId.value,
+      role: 'assistant',
+      content: '',
+      activities: [],
+      createdAt: null as any
+    }
+    messages.value = [...messages.value, assistantMsg]
+
     const token = await getToken()
-    const url = `${FUNCTIONS_BASE}/generateStream?projectId=${projectId.value}&prompt=${encodeURIComponent(prompt)}`
+    const url = `${FUNCTIONS_BASE}/generateStream`
 
     try {
       const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ projectId: projectId.value, prompt }),
         signal: abortController.signal
       })
 
@@ -140,6 +208,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
+      let eventType = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -151,54 +220,113 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
         for (const line of lines) {
           if (line.startsWith('event: ')) {
-            // handled with next data line
+            eventType = line.slice(7).trim()
           } else if (line.startsWith('data: ')) {
             try {
               const event: SSEEvent = JSON.parse(line.slice(6))
               handleSSEEvent(event)
             } catch {
-              // malformed event — skip
+              // malformed — skip
             }
+            eventType = ''
           }
         }
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        generationState.value.error = err instanceof Error ? err.message : 'Generation failed'
+        const errMsg = err instanceof Error ? err.message : 'Generation failed'
+        generationState.value.error = errMsg
+        // Update assistant bubble with error
+        updateInProgressMessage(msg => {
+          msg.activities = [...(msg.activities ?? []), { kind: 'status', label: `❌ ${errMsg}` }]
+        })
       }
     } finally {
       generationState.value.isGenerating = false
       generationState.value.currentFile = null
+      activeStreamFile.value = null
+      // Don't clear inProgressMsgId immediately — Firestore listener will replace it
+      setTimeout(() => {
+        inProgressMsgId.value = null
+      }, 2000)
       await fetchSnapshots()
     }
   }
 
+  function updateInProgressMessage(updater: (msg: Message) => void) {
+    if (!inProgressMsgId.value) return
+    const idx = messages.value.findIndex(m => m.id === inProgressMsgId.value)
+    if (idx === -1) return
+    const updated = { ...messages.value[idx]! }
+    updater(updated)
+    messages.value = [...messages.value.slice(0, idx), updated, ...messages.value.slice(idx + 1)]
+  }
+
+  function addActivity(activity: ChatActivity) {
+    updateInProgressMessage(msg => {
+      msg.activities = [...(msg.activities ?? []), activity]
+    })
+  }
+
   function handleSSEEvent(event: SSEEvent) {
     switch (event.type) {
-      case 'token':
-        streamBuffer.value += event.text
-        break
       case 'status':
         generationState.value.status = event.message
+        addActivity({ kind: 'status', label: event.message })
         break
-      case 'file_start':
-        generationState.value.currentFile = event.path
-        generationState.value.status = `Writing ${event.path}...`
+
+      case 'activity':
+        addActivity({ kind: event.kind, label: event.label, path: event.path })
         break
+
+      case 'file_start': {
+        const path = event.path
+        generationState.value.currentFile = path
+        generationState.value.status = `Writing ${path}...`
+        streamingFileContents.value = { ...streamingFileContents.value, [path]: '' }
+        activeStreamFile.value = path
+        activeFilePath.value = path
+        addActivity({ kind: 'file_write', label: `Creating ${path}`, path })
+        break
+      }
+
+      case 'token': {
+        if (activeStreamFile.value) {
+          streamingFileContents.value = {
+            ...streamingFileContents.value,
+            [activeStreamFile.value]:
+              (streamingFileContents.value[activeStreamFile.value] ?? '') + event.text
+          }
+        }
+        break
+      }
+
       case 'file_end':
         generationState.value.currentFile = null
+        // Keep the streamed content until Firestore catches up
         break
-      case 'complete':
+
+      case 'complete': {
         generationState.value.status = `Done — ${event.filesCount} file(s) generated`
-        streamBuffer.value = ''
+        const summary = event.summary || `Generated ${event.filesCount} file(s) successfully.`
+        updateInProgressMessage(msg => {
+          msg.content = summary
+          msg.activities = [
+            ...(msg.activities ?? []).filter(a => a.kind !== 'status'),
+            { kind: 'summary', label: summary }
+          ]
+        })
         // Auto-select index.html after generation
         if (files.value.find(f => f.path === 'index.html')) {
           activeFilePath.value = 'index.html'
         }
         break
+      }
+
       case 'error':
         generationState.value.error = event.message
         generationState.value.status = ''
+        addActivity({ kind: 'status', label: `❌ ${event.message}` })
         break
     }
   }
@@ -207,6 +335,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     abortController?.abort()
     generationState.value.isGenerating = false
     generationState.value.status = 'Cancelled'
+    activeStreamFile.value = null
   }
 
   async function restoreSnapshot(snapshotId: string) {
@@ -227,6 +356,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     files.value = []
     messages.value = []
     snapshots.value = []
+    streamingFileContents.value = {}
+    activeStreamFile.value = null
+    inProgressMsgId.value = null
   }
 
   return {
@@ -238,7 +370,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeFile,
     fileTree,
     generationState,
-    streamBuffer,
+    editorContent,
+    activeStreamFile,
+    streamingFileContents,
     init,
     destroy,
     selectFile,

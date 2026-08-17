@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "cd frontend && npm run dev",
     "emulators": "firebase emulators:start",
-    "deploy": "firebase deploy"
+    "deploy": "firebase deploy",
+    "format": "npx prettier --write '**/*.{ts,vue,js,json,css,md}'"
   },
   "devDependencies": {
     "@prettier/plugin-xml": "^3.4.2",

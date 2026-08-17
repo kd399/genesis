@@ -72,17 +72,29 @@ export interface Snapshot {
 
 // ─── Message ─────────────────────────────────────────────────────────────────
 
+export type MessageRole = 'user' | 'assistant'
+
+export interface ChatActivity {
+  kind: 'status' | 'file_read' | 'file_write' | 'file_delete' | 'summary'
+  label: string
+  /** file path — only on file_* kinds */
+  path?: string
+}
+
 export interface Message {
   id: string
   projectId: string
-  role: 'user' | 'assistant'
+  role: MessageRole
   content: string
+  /** Rich activity steps shown under an assistant bubble while/after generating */
+  activities?: ChatActivity[]
   createdAt: Timestamp
 }
 
 // ─── SSE Event Protocol ──────────────────────────────────────────────────────
 
-export type SSEEventType = 'token' | 'file_start' | 'file_end' | 'complete' | 'error' | 'status'
+export type SSEEventType =
+  'token' | 'file_start' | 'file_end' | 'complete' | 'error' | 'status' | 'activity'
 
 export interface SSETokenEvent {
   type: 'token'
@@ -104,6 +116,7 @@ export interface SSECompleteEvent {
   generationId: string
   snapshotId: string
   filesCount: number
+  summary: string
 }
 
 export interface SSEErrorEvent {
@@ -117,6 +130,14 @@ export interface SSEStatusEvent {
   message: string
 }
 
+/** Rich activity events used to build the chat assistant bubble in real-time */
+export interface SSEActivityEvent {
+  type: 'activity'
+  kind: ChatActivity['kind']
+  label: string
+  path?: string
+}
+
 export type SSEEvent =
   | SSETokenEvent
   | SSEFileStartEvent
@@ -124,6 +145,7 @@ export type SSEEvent =
   | SSECompleteEvent
   | SSEErrorEvent
   | SSEStatusEvent
+  | SSEActivityEvent
 
 // ─── Generation ──────────────────────────────────────────────────────────────
 

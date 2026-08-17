@@ -8,7 +8,7 @@ import type { HighLevelConnection } from '@/types'
 export const useHighLevelStore = defineStore('highlevel', () => {
   const connection = ref<HighLevelConnection | null>(null)
   const loading = ref(false)
-  console.log("loading = ref(false) ", loading.value);
+  console.log('loading = ref(false) ', loading.value)
 
   const isConnected = computed(() => !!connection.value)
   const locationName = computed(() => connection.value?.locationName ?? null)
