@@ -16,23 +16,33 @@ export async function listContacts(
   locationId: string,
   options?: {
     limit?: number
-    skip?: number
+    // NOTE: HL deprecated `skip` — pagination is now cursor-based via `startAfter`
+    startAfter?: number // Unix ms timestamp of last contact's dateAdded
+    startAfterId?: string // ID of last contact (used together with startAfter)
     query?: string
   }
-): Promise<{ contacts: HLContact[]; count: number }> {
+): Promise<{
+  contacts: HLContact[]
+  count: number
+  meta?: { total: number; nextPageUrl?: string; startAfter?: number; startAfterId?: string }
+}> {
   const client = createHLClient(userId)
   const params: Record<string, string | number> = {
     locationId,
-    limit: options?.limit ?? 20,
-    skip: options?.skip ?? 0
+    limit: options?.limit ?? 20
   }
+
+  // HL uses cursor-based pagination — "skip" is rejected with 422
+  // Use startAfter (Unix ms) + startAfterId for subsequent pages
+  if (options?.startAfter) params.startAfter = options.startAfter
+  if (options?.startAfterId) params.startAfterId = options.startAfterId
   if (options?.query) params.query = options.query
 
-  // HL contacts endpoint — no trailing slash, locationId as query param
-  const res = await client.get('/contacts', { params })
+  const res = await client.get('/contacts/', { params })
   return {
     contacts: res.data.contacts ?? [],
-    count: res.data.count ?? 0
+    count: res.data.count ?? 0,
+    meta: res.data.meta
   }
 }
 
@@ -47,7 +57,7 @@ export async function createContact(
   }
 ): Promise<HLContact> {
   const client = createHLClient(userId)
-  const res = await client.post('/contacts', { ...data, locationId })
+  const res = await client.post('/contacts/', { ...data, locationId })
   return res.data.contact
 }
 

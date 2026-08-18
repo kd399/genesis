@@ -23,8 +23,8 @@ export async function listCalendars(
   locationId: string
 ): Promise<{ calendars: HLCalendar[] }> {
   const client = createHLClient(userId)
-  // No trailing slash — HL is strict about this
-  const res = await client.get('/calendars', { params: { locationId } })
+  // GET /calendars — locationId as query param, no trailing slash
+  const res = await client.get('/calendars/', { params: { locationId } })
   return { calendars: res.data.calendars ?? [] }
 }
 
@@ -34,7 +34,7 @@ export async function getAppointments(
   options?: {
     startTime?: string // ISO string — we convert to Unix ms for HL
     endTime?: string // ISO string — we convert to Unix ms for HL
-    calendarId?: string
+    calendarId?: string // preferred: if provided, scope to this calendar
   }
 ): Promise<{ appointments: HLAppointment[] }> {
   const client = createHLClient(userId)
@@ -45,18 +45,38 @@ export async function getAppointments(
   const startMs = options?.startTime ? new Date(options.startTime).getTime() : now.getTime()
   const endMs = options?.endTime ? new Date(options.endTime).getTime() : weekLater.getTime()
 
+  // HL /calendars/events REQUIRES at least one of: userId, calendarId, groupId
+  // along with locationId + time range.
+  // Strategy: use provided calendarId if available; otherwise fetch the first
+  // calendar for this location and use its ID.
+  let calendarId = options?.calendarId
+
+  if (!calendarId) {
+    try {
+      const { calendars } = await listCalendars(userId, locationId)
+      calendarId = calendars[0]?.id
+    } catch {
+      // If calendar fetch fails, fall through — HL will return 422 and we surface it
+    }
+  }
+
+  if (!calendarId) {
+    // No calendars in this location — return empty rather than hitting a 422
+    console.warn('getAppointments: no calendarId found for locationId', locationId)
+    return { appointments: [] }
+  }
+
   const params: Record<string, string | number> = {
     locationId,
     startTime: startMs,
-    endTime: endMs
+    endTime: endMs,
+    calendarId
   }
-  if (options?.calendarId) params.calendarId = options.calendarId
 
-  // Correct endpoint is /calendars/events (NOT /calendars/events/appointments)
+  // GET /calendars/events
   const res = await client.get('/calendars/events', { params })
 
   // HL returns { events: [...] } — each event has appointmentStatus
-  // Normalize to our shape so generated apps have a consistent contract
   const events = res.data.events ?? res.data.appointments ?? []
   const appointments: HLAppointment[] = events.map((e: Record<string, unknown>) => ({
     id: e.id as string,
