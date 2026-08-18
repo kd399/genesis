@@ -8,7 +8,7 @@ export interface AuthenticatedRequest extends functions.https.Request {
 export async function verifyAuth(req: functions.https.Request): Promise<string> {
   const authHeader = req.headers.authorization
   if (!authHeader?.startsWith('Bearer ')) {
-    throw new functions.https.HttpsError('unauthenticated', 'Missing authorization header')
+    throw new Error('Missing or invalid authorization header')
   }
 
   const token = authHeader.split('Bearer ')[1]
@@ -16,6 +16,6 @@ export async function verifyAuth(req: functions.https.Request): Promise<string> 
     const decoded = await auth.verifyIdToken(token!)
     return decoded.uid
   } catch {
-    throw new functions.https.HttpsError('unauthenticated', 'Invalid or expired token')
+    throw new Error('Invalid or expired token')
   }
 }

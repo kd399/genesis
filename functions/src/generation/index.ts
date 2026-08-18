@@ -7,6 +7,7 @@ import { buildSystemPrompt } from './prompt'
 import { parseLLMResponse, type FileOperation } from './parser'
 import { createSnapshot } from '../snapshots'
 import { InferenceClient } from '@huggingface/inference'
+import { setCors } from '../cors'
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────
 
@@ -124,12 +125,7 @@ class DelimiterStreamParser {
 export const generateStream = functions
   .runWith({ timeoutSeconds: 300, memory: '512MB' })
   .https.onRequest(async (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*')
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-    if (req.method === 'OPTIONS') {
-      res.status(204).send('')
-      return
-    }
+    if (setCors(res, req)) return // handles OPTIONS and sets headers
 
     res.set({
       'Content-Type': 'text/event-stream',
@@ -179,6 +175,23 @@ export const generateStream = functions
         existingFiles.forEach(f => sendActivity(res, 'file_read', `Reading ${f.path}`, f.path))
       }
 
+      // ── Load prior conversation history (last 10 turns for context) ───────
+      const priorMsgsSnap = await db
+        .collection('projects')
+        .doc(projectId)
+        .collection('messages')
+        .orderBy('createdAt', 'asc')
+        .limitToLast(10)
+        .get()
+
+      // Only keep role+content, filter out messages with empty content
+      const conversationHistory = priorMsgsSnap.docs
+        .map(d => ({
+          role: d.data().role as 'user' | 'assistant',
+          content: (d.data().content as string) || ''
+        }))
+        .filter(m => m.content.trim().length > 0)
+
       // ── Save user message ─────────────────────────────────────────────────
       await db.collection('projects').doc(projectId).collection('messages').add({
         projectId,
@@ -221,6 +234,14 @@ export const generateStream = functions
           top_p: 0.95,
           messages: [
             { role: 'system', content: systemPrompt },
+            // Prior conversation turns for context
+            ...conversationHistory.reduce(
+              (acc: { role: 'user' | 'assistant'; content: string }[], m) => {
+                if (acc.length === 0 || acc[acc.length - 1]!.role !== m.role) acc.push(m)
+                return acc
+              },
+              []
+            ),
             { role: 'user', content: prompt }
           ]
         })
@@ -244,11 +265,35 @@ export const generateStream = functions
       } else {
         // ── Anthropic path: stream tokens, then parse response after ──────
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+        // Build messages: prior turns + current user prompt
+        // Anthropic requires alternating user/assistant turns — ensure that
+        const historyMessages: { role: 'user' | 'assistant'; content: string }[] = []
+        for (const m of conversationHistory) {
+          // Skip if same role as last to avoid consecutive same-role messages
+          if (
+            historyMessages.length > 0 &&
+            historyMessages[historyMessages.length - 1]!.role === m.role
+          )
+            continue
+          historyMessages.push({ role: m.role, content: m.content })
+        }
+        // Always end with the current user prompt
+        if (
+          historyMessages.length === 0 ||
+          historyMessages[historyMessages.length - 1]!.role === 'assistant'
+        ) {
+          historyMessages.push({ role: 'user', content: prompt })
+        } else {
+          // Last was user — replace with current (avoid double user)
+          historyMessages[historyMessages.length - 1] = { role: 'user', content: prompt }
+        }
+
         const stream = anthropic.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: 8192,
           system: systemPrompt,
-          messages: [{ role: 'user', content: prompt }]
+          messages: historyMessages
         })
 
         for await (const chunk of stream) {

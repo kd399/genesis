@@ -46,24 +46,22 @@ const srcdoc = computed((): string | null => {
     }
   })
 
-  // Inject genesis bootstrap script (proxy URL + token bridge)
+  // Inject a tiny pre-bootstrap that sets proxy URL aliases BEFORE the generated app's bootstrap.
+  // The generated app's bootstrap (from prompt.ts) handles all token listening & hlFetch setup.
+  // We keep this minimal to avoid duplicate event listeners or variable conflicts.
   const bootstrap = `
 <script>
 (function() {
+  // Proxy URL available under both names for any generated code
   window.__GENESIS_PROXY__ = '${FUNCTIONS_BASE}/highlevelProxy';
-  // Listen for auth token from parent
-  window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'auth-token') {
-      window.__GENESIS_TOKEN__ = e.data.token;
-      // Dispatch a custom event so app code can react
-      window.dispatchEvent(new CustomEvent('genesis-ready', { detail: { token: e.data.token } }));
-    }
-  });
+  window.__proxyBase    = '${FUNCTIONS_BASE}/highlevelProxy';
 })();
 <\/script>`
 
-  // Insert before </head> or at start if no head
-  if (html.includes('</head>')) {
+  // Insert at the very beginning of <head> (before the generated app's own bootstrap)
+  if (html.includes('<head>')) {
+    html = html.replace('<head>', '<head>\n' + bootstrap)
+  } else if (html.includes('</head>')) {
     html = html.replace('</head>', bootstrap + '\n</head>')
   } else {
     html = bootstrap + '\n' + html
@@ -103,10 +101,20 @@ async function refreshPreview() {
 }
 
 async function injectToken() {
-  if (!iframeEl.value?.contentWindow || !auth.currentUser) return
+  if (!iframeEl.value?.contentWindow) return
   try {
     const token = await getIdToken(auth.currentUser)
+
+    // Post message — picked up by the 'message' listener in the bootstrap
     iframeEl.value.contentWindow.postMessage({ type: 'auth-token', token }, '*')
+    // Also dispatch genesis-ready directly into the iframe's window as a backup
+    try {
+      iframeEl.value.contentWindow.dispatchEvent(
+        new CustomEvent('genesis-ready', { detail: { token } })
+      )
+    } catch {
+      // cross-origin restriction — postMessage is sufficient
+    }
   } catch {
     // non-fatal
   }
@@ -115,8 +123,9 @@ async function injectToken() {
 function onIframeLoad() {
   isLoading.value = false
   previewReady.value = true
-  // Inject token shortly after load so the app's message listener is ready
-  setTimeout(() => injectToken(), 100)
+  // Inject token after a tick so the generated app's bootstrap event listeners are registered.
+  // The generated bootstrap sets up listeners synchronously in <head>, so 50ms is plenty.
+  setTimeout(() => injectToken(), 50)
 }
 
 function onIframeError() {
@@ -145,7 +154,7 @@ async function openInNewTab() {
         </div>
         <span class="text-xs font-semibold">Preview</span>
         <!-- Live indicator -->
-        <div v-if="hasPreview && !ws.generationState.isGenerating" class="flex items-center gap-1">
+        <div v-if="(hasPreview && !ws.generationState.isGenerating)" class="flex items-center gap-1">
           <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
           <span class="text-[10px] text-muted-foreground">Live</span>
         </div>

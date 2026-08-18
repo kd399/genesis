@@ -2,15 +2,11 @@ import * as functions from 'firebase-functions'
 import { FieldValue } from 'firebase-admin/firestore'
 import { db } from '../admin'
 import { verifyAuth } from '../auth/middleware'
+import { setCors } from '../cors'
 
 // GET /projects
 export const listProjects = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -31,12 +27,7 @@ export const listProjects = functions.https.onRequest(async (req, res) => {
 
 // POST /projects
 export const createProject = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -66,12 +57,7 @@ export const createProject = functions.https.onRequest(async (req, res) => {
 
 // PATCH /projects/:id
 export const updateProject = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -95,12 +81,7 @@ export const updateProject = functions.https.onRequest(async (req, res) => {
 
 // DELETE /projects/:id (soft delete)
 export const deleteProject = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)

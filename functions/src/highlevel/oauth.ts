@@ -45,21 +45,26 @@ export const hlOAuthCallback = functions.https.onRequest(async (req, res) => {
 
   try {
     // Exchange code for tokens
-    // Per HL docs: JSON body with Content-Type: application/json
+    // HighLevel requires application/x-www-form-urlencoded (NOT JSON)
+    // https://marketplace.gohighlevel.com/docs/ghl/oauth/get-access-token
+    const redirectUri =
+      process.env.HIGHLEVEL_REDIRECT_URI ??
+      `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT ?? 'app-builder-77fdb'}/us-central1/hlOAuthCallback`
+
     const tokenRes = await axios.post<HLTokenResponse>(
       HL_TOKEN_URL,
-      {
+      new URLSearchParams({
         client_id: process.env.HIGHLEVEL_CLIENT_ID ?? '',
         client_secret: process.env.HIGHLEVEL_CLIENT_SECRET ?? '',
         grant_type: 'authorization_code',
         code,
-        user_type: 'Location', // Sub-account token for Contacts/Calendar/Conversations APIs
-        redirect_uri: process.env.HIGHLEVEL_REDIRECT_URI ?? ''
-      },
+        user_type: 'Location',
+        redirect_uri: redirectUri
+      }).toString(),
       {
         headers: {
           Accept: 'application/json',
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/x-www-form-urlencoded'
         }
       }
     )
@@ -128,7 +133,10 @@ export async function refreshHighLevelToken(userId: string): Promise<string> {
 
   // Token expired — use refresh token to get a new one
   // Per HL docs: refresh token is valid 1 year, becomes invalid after use (new one issued)
-  // Use x-www-form-urlencoded for refresh (per HL docs sample)
+  const redirectUri =
+    process.env.HIGHLEVEL_REDIRECT_URI ??
+    `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT ?? 'app-builder-77fdb'}/us-central1/hlOAuthCallback`
+
   const tokenRes = await axios.post<HLTokenResponse>(
     HL_TOKEN_URL,
     new URLSearchParams({
@@ -137,7 +145,7 @@ export async function refreshHighLevelToken(userId: string): Promise<string> {
       grant_type: 'refresh_token',
       refresh_token: conn.refreshToken as string,
       user_type: 'Location',
-      redirect_uri: process.env.HIGHLEVEL_REDIRECT_URI ?? ''
+      redirect_uri: redirectUri
     }).toString(),
     {
       headers: {

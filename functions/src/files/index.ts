@@ -2,15 +2,11 @@ import * as functions from 'firebase-functions'
 import { FieldValue } from 'firebase-admin/firestore'
 import { db } from '../admin'
 import { verifyAuth } from '../auth/middleware'
+import { setCors } from '../cors'
 
 // GET /listFiles?projectId=xxx
 export const listFiles = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -43,12 +39,7 @@ export const listFiles = functions.https.onRequest(async (req, res) => {
 
 // GET /getFile?projectId=xxx&path=src/App.vue
 export const getFile = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -87,12 +78,7 @@ export const getFile = functions.https.onRequest(async (req, res) => {
 
 // POST /saveFile
 export const saveFile = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)

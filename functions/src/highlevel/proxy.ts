@@ -1,6 +1,7 @@
 import * as functions from 'firebase-functions'
 import { verifyAuth } from '../auth/middleware'
 import { db } from '../admin'
+import { setCors } from '../cors'
 import { listContacts } from './contacts'
 import { listConversations } from './conversations'
 import { getAppointments, listCalendars } from './calendars'
@@ -17,13 +18,9 @@ import {
  * When not connected: returns realistic dummy data so apps work without HL.
  */
 export const highlevelProxy = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
+  // ── Normal path ───────────────────────────────────────────────────────────
   try {
     const uid = await verifyAuth(req)
     const resource = req.query.resource as string
@@ -94,7 +91,10 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
         res.status(400).json({ error: `Unknown resource: ${resource}` })
     }
   } catch (err) {
-    console.error('HighLevel proxy error:', err)
-    res.status(500).json({ error: 'Failed to fetch data', message: String(err) })
+    const msg = String(err)
+    console.error('HighLevel proxy error:', msg)
+    const isAuthError =
+      msg.includes('authorization') || msg.includes('token') || msg.includes('unauthenticated')
+    res.status(isAuthError ? 401 : 500).json({ error: 'Failed to fetch data', message: msg })
   }
 })

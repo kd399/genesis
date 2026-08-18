@@ -2,15 +2,11 @@ import * as functions from 'firebase-functions'
 import { FieldValue } from 'firebase-admin/firestore'
 import { db } from '../admin'
 import { verifyAuth } from '../auth/middleware'
+import { setCors } from '../cors'
 
 // GET /listSnapshots?projectId=xxx
 export const listSnapshots = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)
@@ -50,12 +46,7 @@ export const listSnapshots = functions.https.onRequest(async (req, res) => {
 
 // POST /restoreSnapshot
 export const restoreSnapshot = functions.https.onRequest(async (req, res) => {
-  res.set('Access-Control-Allow-Origin', '*')
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-  if (req.method === 'OPTIONS') {
-    res.status(204).send('')
-    return
-  }
+  if (setCors(res, req)) return
 
   try {
     const uid = await verifyAuth(req)

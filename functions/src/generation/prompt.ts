@@ -46,40 +46,53 @@ Token arrives via postMessage from parent — use the bootstrap below.
 
 ## Runtime Bootstrap — ALWAYS include this script block in index.html inside <head>
 <script>
-  var __token = null;
-  var __proxyBase = '${ctx.hlProxyBaseUrl}';
-  window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'auth-token') {
-      __token = e.data.token;
-      if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
+  (function() {
+    var __token = null;
+    var __proxyBase = '${ctx.hlProxyBaseUrl}';
+    var __ready = false;
+
+    function triggerReady(token) {
+      __token = token;
+      window.__GENESIS_TOKEN__ = token;
+      if (!__ready) {
+        __ready = true;
+        // Give the page a tick to define onGenesisReady before calling it
+        setTimeout(function() {
+          if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
+        }, 0);
+      }
     }
-  });
-  window.addEventListener('genesis-ready', function(e) {
-    __token = e.detail.token;
-    if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
-  });
-  function hlFetch(resource, params) {
-    if (!__token) return Promise.reject(new Error('Not authenticated'));
-    var url = new URL(__proxyBase);
-    url.searchParams.set('resource', resource);
-    if (params) Object.keys(params).forEach(function(k) { url.searchParams.set(k, String(params[k])); });
-    return fetch(url.toString(), { headers: { 'Authorization': 'Bearer ' + __token } })
-      .then(function(r) { if (!r.ok) throw new Error('API error ' + r.status); return r.json(); })
-      .then(function(data) {
-        // Show demo banner if HighLevel is not connected (dummy data)
-        if (data.isDummy) {
-          var existing = document.getElementById('__genesis_demo_banner__');
-          if (!existing) {
-            var b = document.createElement('div');
-            b.id = '__genesis_demo_banner__';
-            b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:6px 12px;font-size:12px;font-family:sans-serif;';
-            b.innerHTML = '🔮 Demo Mode — Connect HighLevel on the dashboard to use real CRM data';
-            document.body.prepend(b);
+
+    window.addEventListener('message', function(e) {
+      if (e.data && e.data.type === 'auth-token') triggerReady(e.data.token);
+    });
+    window.addEventListener('genesis-ready', function(e) {
+      if (e.detail && e.detail.token) triggerReady(e.detail.token);
+    });
+
+    window.hlFetch = function(resource, params) {
+      var tok = __token || window.__GENESIS_TOKEN__;
+      if (!tok) return Promise.reject(new Error('Genesis: not authenticated yet'));
+      var url = new URL(__proxyBase);
+      url.searchParams.set('resource', resource);
+      if (params) Object.keys(params).forEach(function(k) { url.searchParams.set(k, String(params[k])); });
+      return fetch(url.toString(), { headers: { 'Authorization': 'Bearer ' + tok } })
+        .then(function(r) { if (!r.ok) throw new Error('API error ' + r.status); return r.json(); })
+        .then(function(data) {
+          if (data.isDummy) {
+            var existing = document.getElementById('__genesis_demo_banner__');
+            if (!existing) {
+              var b = document.createElement('div');
+              b.id = '__genesis_demo_banner__';
+              b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:8px 12px;font-size:12px;font-family:sans-serif;letter-spacing:0.01em;';
+              b.textContent = '🔮 Demo Mode — showing sample CRM data. Connect HighLevel in the dashboard to use live data.';
+              document.body.prepend(b);
+            }
           }
-        }
-        return data;
-      });
-  }
+          return data;
+        });
+    };
+  })();
 </script>
 
 ## Technology
@@ -90,12 +103,13 @@ Token arrives via postMessage from parent — use the bootstrap below.
 
 ## Code Rules
 1. Bootstrap script MUST be in <head> of index.html (shown above — copy it exactly)
-2. Set window.onGenesisReady to start fetching — never fetch before token arrives
-3. Show animated skeleton placeholders (animate-pulse) while data loads
-4. On error: show a red banner with a Retry button that calls the fetch again
-5. Show REAL data from the API — no hardcoded/fake data ever
-6. For dashboards: summary cards (total contacts, next appointment, unread conversations)
-7. Use Tailwind for all styling — clean, professional, card-based layout
+2. Set window.onGenesisReady = function() { ... } AFTER the bootstrap — this is called automatically once the auth token arrives
+3. NEVER redefine hlFetch — it is already declared globally by the bootstrap above. Just call hlFetch('contacts', {...}) directly
+4. Show animated skeleton placeholders (animate-pulse) while data loads
+5. On error: show a red banner with a Retry button that calls the fetch again
+6. The API returns real CRM data OR realistic demo data when HighLevel is not connected — the demo banner is shown automatically, no extra code needed
+7. For dashboards: summary cards (total contacts, next appointment, unread conversations)
+8. Use Tailwind for all styling — clean, professional, card-based layout
 
 ${outputFormat}
 

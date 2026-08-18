@@ -1,0 +1,9 @@
+node_modules
+dist
+
+# Local dev secrets — never commit
+.env
+.env.local
+.env.development
+
+# .env.production is committed as a template (fill values on server/CI)
