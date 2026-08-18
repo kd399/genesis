@@ -91,10 +91,26 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
         res.status(400).json({ error: `Unknown resource: ${resource}` })
     }
   } catch (err) {
+    // Log the full HL response body so debugging is easier
+    const axiosErr = err as { response?: { status?: number; data?: unknown }; message?: string }
+    const hlStatus = axiosErr.response?.status
+    const hlBody = axiosErr.response?.data
+    console.error('HighLevel proxy error:', {
+      message: axiosErr.message,
+      hlStatus,
+      hlBody
+    })
     const msg = String(err)
-    console.error('HighLevel proxy error:', msg)
     const isAuthError =
-      msg.includes('authorization') || msg.includes('token') || msg.includes('unauthenticated')
-    res.status(isAuthError ? 401 : 500).json({ error: 'Failed to fetch data', message: msg })
+      msg.includes('authorization') ||
+      msg.includes('token') ||
+      msg.includes('unauthenticated') ||
+      hlStatus === 401
+    res.status(isAuthError ? 401 : 500).json({
+      error: 'Failed to fetch data',
+      message: msg,
+      hlStatus,
+      hlBody
+    })
   }
 })

@@ -28,7 +28,8 @@ export async function listContacts(
   }
   if (options?.query) params.query = options.query
 
-  const res = await client.get('/contacts/', { params })
+  // HL contacts endpoint — no trailing slash, locationId as query param
+  const res = await client.get('/contacts', { params })
   return {
     contacts: res.data.contacts ?? [],
     count: res.data.count ?? 0
@@ -46,7 +47,7 @@ export async function createContact(
   }
 ): Promise<HLContact> {
   const client = createHLClient(userId)
-  const res = await client.post('/contacts/', { ...data, locationId })
+  const res = await client.post('/contacts', { ...data, locationId })
   return res.data.contact
 }
 

@@ -35,6 +35,7 @@ export async function listConversations(
       ...(options?.startAfterDate ? { startAfterDate: options.startAfterDate } : {})
     }
   })
+  // HL returns conversations under "conversations" key
   return { conversations: res.data.conversations ?? [] }
 }
 
