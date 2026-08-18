@@ -139,12 +139,8 @@ async function openInNewTab() {
       <div class="flex items-center gap-2">
         <div class="w-5 h-5 rounded bg-green-500/10 flex items-center justify-center">
           <svg class="w-3 h-3 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-            />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
         </div>
         <span class="text-xs font-semibold">Preview</span>
@@ -162,12 +158,8 @@ async function openInNewTab() {
           @click="openInNewTab"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-            />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
         </button>
         <button
@@ -177,12 +169,8 @@ async function openInNewTab() {
           @click="refreshPreview"
         >
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </button>
       </div>
@@ -190,22 +178,17 @@ async function openInNewTab() {
 
     <!-- Preview area -->
     <div class="flex-1 relative overflow-hidden bg-white">
+
       <!-- Empty state -->
       <div
         v-if="!hasPreview && !ws.generationState.isGenerating"
         class="absolute inset-0 flex items-center justify-center bg-muted/10"
       >
         <div class="text-center text-muted-foreground">
-          <div
-            class="w-16 h-16 rounded-2xl border-2 border-dashed border-border mx-auto mb-4 flex items-center justify-center"
-          >
+          <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-border mx-auto mb-4 flex items-center justify-center">
             <svg class="w-7 h-7 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-              />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
           </div>
           <p class="text-sm font-medium">No preview yet</p>
@@ -221,15 +204,10 @@ async function openInNewTab() {
         <div class="text-center space-y-3">
           <div class="relative w-12 h-12 mx-auto">
             <svg class="w-12 h-12 animate-spin text-primary/20" fill="none" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/>
             </svg>
-            <svg
-              class="absolute inset-0 w-12 h-12 animate-spin text-primary"
-              fill="none"
-              viewBox="0 0 24 24"
-              style="animation-duration: 0.8s"
-            >
-              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <svg class="absolute inset-0 w-12 h-12 animate-spin text-primary" fill="none" viewBox="0 0 24 24" style="animation-duration:0.8s">
+              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
             </svg>
           </div>
           <div>
@@ -244,9 +222,7 @@ async function openInNewTab() {
         v-if="isLoading && hasPreview && !ws.generationState.isGenerating"
         class="absolute inset-0 flex items-center justify-center bg-background/60 z-10"
       >
-        <div
-          class="w-6 h-6 rounded-full border-2 border-primary border-t-transparent animate-spin"
-        />
+        <div class="w-6 h-6 rounded-full border-2 border-primary border-t-transparent animate-spin" />
       </div>
 
       <!-- Error -->
@@ -255,12 +231,7 @@ async function openInNewTab() {
         class="absolute bottom-3 left-3 right-3 bg-destructive/10 text-destructive text-xs rounded-lg px-3 py-2 z-20 flex items-center gap-2"
       >
         <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         {{ previewError }}
       </div>

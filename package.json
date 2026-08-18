@@ -10,7 +10,8 @@
     "dev": "cd frontend && npm run dev",
     "emulators": "firebase emulators:start",
     "deploy": "firebase deploy",
-    "format": "npx prettier --write '**/*.{ts,vue,js,json,css,md}'"
+    "format": "prettier --write \"**/*.{js,ts,json,md,xml}\"",
+    "zip": "git archive --format=zip --output=wealthos.zip HEAD"
   },
   "devDependencies": {
     "@prettier/plugin-xml": "^3.4.2",

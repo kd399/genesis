@@ -78,18 +78,12 @@ function getTabName(path: string) {
 function getTabIcon(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase()
   switch (ext) {
-    case 'html':
-      return '🌐'
-    case 'js':
-      return '⚡'
-    case 'css':
-      return '🎨'
-    case 'json':
-      return '📋'
-    case 'ts':
-      return '🔷'
-    default:
-      return '📄'
+    case 'html': return '🌐'
+    case 'js':   return '⚡'
+    case 'css':  return '🎨'
+    case 'json': return '📋'
+    case 'ts':   return '🔷'
+    default:     return '📄'
   }
 }
 </script>
@@ -126,12 +120,7 @@ function getTabIcon(path: string): string {
           @click="closeTab(tab, $event)"
         >
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
@@ -142,26 +131,13 @@ function getTabIcon(path: string): string {
         class="ml-auto px-3 flex items-center gap-1.5 text-xs text-muted-foreground shrink-0"
       >
         <svg class="w-3 h-3 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
-          <circle
-            class="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            stroke-width="4"
-          />
-          <path
-            class="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
         </svg>
         <span>
-          {{
-            ws.generationState.currentFile
+          {{ ws.generationState.currentFile
               ? `Writing ${ws.generationState.currentFile}…`
-              : ws.generationState.status || 'Generating…'
-          }}
+              : ws.generationState.status || 'Generating…' }}
         </span>
       </div>
     </div>
@@ -174,18 +150,9 @@ function getTabIcon(path: string): string {
         class="absolute inset-0 flex items-center justify-center text-muted-foreground"
       >
         <div class="text-center">
-          <svg
-            class="w-10 h-10 mx-auto mb-3 opacity-20"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
-            />
+          <svg class="w-10 h-10 mx-auto mb-3 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
           </svg>
           <p class="text-sm">No file selected</p>
           <p class="text-xs mt-1 opacity-60">Click a file in the tree or generate an app</p>
@@ -198,24 +165,9 @@ function getTabIcon(path: string): string {
         class="absolute inset-0 flex items-center justify-center bg-[#1e1e1e]"
       >
         <div class="text-center text-muted-foreground">
-          <svg
-            class="w-8 h-8 animate-spin text-primary mx-auto mb-3"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle
-              class="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              stroke-width="4"
-            />
-            <path
-              class="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
+          <svg class="w-8 h-8 animate-spin text-primary mx-auto mb-3" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
           </svg>
           <p class="text-xs">{{ ws.generationState.status }}</p>
         </div>

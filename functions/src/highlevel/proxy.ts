@@ -4,12 +4,17 @@ import { db } from '../admin'
 import { listContacts } from './contacts'
 import { listConversations } from './conversations'
 import { getAppointments, listCalendars } from './calendars'
+import {
+  getDummyContacts,
+  getDummyConversations,
+  getDummyAppointments,
+  getDummyCalendars
+} from './dummy'
 
 /**
  * Proxy endpoint for generated apps.
- * Generated apps NEVER get direct HL tokens.
- * They call: GET /highlevelProxy?resource=contacts&locationId=xxx
- * This CF handles auth + token refresh + HL API call.
+ * When HighLevel is connected: fetches real CRM data.
+ * When not connected: returns realistic dummy data so apps work without HL.
  */
 export const highlevelProxy = functions.https.onRequest(async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*')
@@ -21,16 +26,40 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
 
   try {
     const uid = await verifyAuth(req)
+    const resource = req.query.resource as string
 
-    // Get HL connection for this user
-    const connSnap = await db.collection('highlevelConnections').doc(uid).get()
-    if (!connSnap.exists) {
-      res.status(400).json({ error: 'HighLevel not connected' })
+    if (!resource) {
+      res.status(400).json({ error: 'resource query param is required' })
       return
     }
 
+    // Check if HighLevel is connected for this user
+    const connSnap = await db.collection('highlevelConnections').doc(uid).get()
+    const isConnected = connSnap.exists && !!connSnap.data()?.accessToken
+
+    // ── Not connected: return dummy data ────────────────────────────────────
+    if (!isConnected) {
+      switch (resource) {
+        case 'contacts':
+          res.json(getDummyContacts(req.query.query as string | undefined))
+          break
+        case 'conversations':
+          res.json(getDummyConversations())
+          break
+        case 'appointments':
+          res.json(getDummyAppointments())
+          break
+        case 'calendars':
+          res.json(getDummyCalendars())
+          break
+        default:
+          res.status(400).json({ error: `Unknown resource: ${resource}` })
+      }
+      return
+    }
+
+    // ── Connected: fetch real HighLevel data ─────────────────────────────────
     const { locationId } = connSnap.data()!
-    const resource = req.query.resource as string
 
     switch (resource) {
       case 'contacts': {
@@ -41,7 +70,6 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
         res.json(data)
         break
       }
-
       case 'conversations': {
         const data = await listConversations(uid, locationId as string, {
           limit: Number(req.query.limit ?? 20)
@@ -49,7 +77,6 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
         res.json(data)
         break
       }
-
       case 'appointments': {
         const data = await getAppointments(uid, locationId as string, {
           startTime: req.query.startTime as string | undefined,
@@ -58,18 +85,16 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
         res.json(data)
         break
       }
-
       case 'calendars': {
         const data = await listCalendars(uid, locationId as string)
         res.json(data)
         break
       }
-
       default:
         res.status(400).json({ error: `Unknown resource: ${resource}` })
     }
-  } catch (err: unknown) {
+  } catch (err) {
     console.error('HighLevel proxy error:', err)
-    res.status(500).json({ error: 'Failed to fetch HighLevel data' })
+    res.status(500).json({ error: 'Failed to fetch data', message: String(err) })
   }
 })

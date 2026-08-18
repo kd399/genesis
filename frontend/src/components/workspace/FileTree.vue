@@ -59,13 +59,8 @@ const tree = computed((): TreeNode[] => {
 function getFileIcon(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase()
   const icons: Record<string, string> = {
-    html: '🌐',
-    js: '⚡',
-    ts: '🔷',
-    vue: '💚',
-    css: '🎨',
-    json: '📋',
-    md: '📝'
+    html: '🌐', js: '⚡', ts: '🔷', vue: '💚',
+    css: '🎨', json: '📋', md: '📝'
   }
   return icons[ext ?? ''] ?? '📄'
 }
@@ -77,10 +72,7 @@ const isStreaming = computed(() => ws.generationState.isGenerating)
   <div class="h-full flex flex-col">
     <div class="px-3 py-2 border-b flex items-center justify-between shrink-0">
       <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Files</span>
-      <span
-        v-if="ws.files.length > 0"
-        class="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
-      >
+      <span v-if="ws.files.length > 0" class="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
         {{ ws.files.length }}
       </span>
     </div>
@@ -97,10 +89,7 @@ const isStreaming = computed(() => ws.generationState.isGenerating)
       <div v-else-if="ws.files.length === 0 && isStreaming" class="px-3 py-3 space-y-1.5">
         <div v-for="i in 3" :key="i" class="flex items-center gap-2 px-2 py-1">
           <div class="w-3 h-3 rounded bg-muted animate-pulse shrink-0" />
-          <div
-            class="h-2.5 bg-muted animate-pulse rounded flex-1"
-            :style="`width:${60 + i * 15}%`"
-          />
+          <div class="h-2.5 bg-muted animate-pulse rounded flex-1" :style="`width:${60+i*15}%`" />
         </div>
       </div>
 
@@ -150,70 +139,45 @@ const FileNodeVue = defineComponent({
       if (node.isDir) return isCollapsed() ? '📁' : '📂'
       const ext = node.name.split('.').pop()?.toLowerCase()
       const icons: Record<string, string> = {
-        html: '🌐',
-        js: '⚡',
-        ts: '🔷',
-        vue: '💚',
-        css: '🎨',
-        json: '📋',
-        md: '📝'
+        html: '🌐', js: '⚡', ts: '🔷', vue: '💚',
+        css: '🎨', json: '📋', md: '📝'
       }
       return icons[ext ?? ''] ?? '📄'
     }
 
     return () =>
       h('div', {}, [
-        h(
-          'button',
-          {
-            class: [
-              'w-full flex items-center gap-1.5 py-[3px] text-left text-xs transition-colors rounded-sm mx-1',
-              isActive()
-                ? 'bg-accent text-accent-foreground font-medium'
-                : 'text-foreground hover:bg-accent/50',
-              props.node.isDir ? 'font-medium text-muted-foreground' : ''
-            ],
-            style: { paddingLeft: `${props.depth * 10 + 8}px`, paddingRight: '8px' },
-            onClick: () => {
-              if (props.node.isDir) emit('toggleDir', props.node.path)
-              else emit('select', props.node.path)
-            }
-          },
-          [
-            // Dir chevron
-            props.node.isDir
-              ? h(
-                  'svg',
-                  {
-                    class: [
-                      'w-3 h-3 shrink-0 transition-transform',
-                      isCollapsed() ? '' : 'rotate-90'
-                    ],
-                    fill: 'none',
-                    viewBox: '0 0 24 24',
-                    stroke: 'currentColor'
-                  },
-                  [
-                    h('path', {
-                      'stroke-linecap': 'round',
-                      'stroke-linejoin': 'round',
-                      'stroke-width': '2',
-                      d: 'M9 5l7 7-7 7'
-                    })
-                  ]
-                )
-              : h('span', { class: 'text-[10px] shrink-0' }, getIcon(props.node)),
+        h('button', {
+          class: [
+            'w-full flex items-center gap-1.5 py-[3px] text-left text-xs transition-colors rounded-sm mx-1',
+            isActive()
+              ? 'bg-accent text-accent-foreground font-medium'
+              : 'text-foreground hover:bg-accent/50',
+            props.node.isDir ? 'font-medium text-muted-foreground' : ''
+          ],
+          style: { paddingLeft: `${props.depth * 10 + 8}px`, paddingRight: '8px' },
+          onClick: () => {
+            if (props.node.isDir) emit('toggleDir', props.node.path)
+            else emit('select', props.node.path)
+          }
+        }, [
+          // Dir chevron
+          props.node.isDir
+            ? h('svg', {
+                class: ['w-3 h-3 shrink-0 transition-transform', isCollapsed() ? '' : 'rotate-90'],
+                fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor'
+              }, [
+                h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-width': '2', d: 'M9 5l7 7-7 7' })
+              ])
+            : h('span', { class: 'text-[10px] shrink-0' }, getIcon(props.node)),
 
-            h('span', { class: 'truncate flex-1' }, props.node.name),
+          h('span', { class: 'truncate flex-1' }, props.node.name),
 
-            // Streaming pulse
-            isStreaming()
-              ? h('span', {
-                  class: 'w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0 ml-auto'
-                })
-              : null
-          ]
-        ),
+          // Streaming pulse
+          isStreaming()
+            ? h('span', { class: 'w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0 ml-auto' })
+            : null
+        ]),
 
         // Children (if dir not collapsed)
         ...(!isCollapsed() && props.node.children

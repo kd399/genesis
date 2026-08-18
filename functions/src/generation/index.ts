@@ -4,16 +4,16 @@ import { FieldValue } from 'firebase-admin/firestore'
 import { db } from '../admin'
 import { verifyAuth } from '../auth/middleware'
 import { buildSystemPrompt } from './prompt'
-import { parseLLMResponse } from './parser'
+import { parseLLMResponse, type FileOperation } from './parser'
 import { createSnapshot } from '../snapshots'
 import { InferenceClient } from '@huggingface/inference'
 
-// SSE helper
-function sendSSE(res: functions.Response, event: string, data: unknown) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+// ─── SSE helpers ─────────────────────────────────────────────────────────────
+
+function sendSSE(res: functions.Response, eventType: string, data: unknown) {
+  res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
-// Activity event shorthand
 function sendActivity(
   res: functions.Response,
   kind: 'status' | 'file_read' | 'file_write' | 'file_delete' | 'summary',
@@ -22,6 +22,104 @@ function sendActivity(
 ) {
   sendSSE(res, 'activity', { type: 'activity', kind, label, path })
 }
+
+// ─── Real-time delimiter-stream parser ───────────────────────────────────────
+// Detects <<<FILE:path>>> ... <<<END_FILE>>> blocks as tokens stream in.
+// Sends file_start / token (content only) / file_end events in real time.
+
+class DelimiterStreamParser {
+  private buf = ''
+  private inFile = false
+  private currentPath = ''
+  private fileContent = ''
+  readonly operations: FileOperation[] = []
+
+  constructor(private readonly res: functions.Response) {}
+
+  /** Feed the next raw token chunk. Returns consumed text. */
+  feed(text: string) {
+    this.buf += text
+
+    while (true) {
+      if (!this.inFile) {
+        // Scan for <<<FILE:...>>>
+        const start = this.buf.indexOf('<<<FILE:')
+        if (start === -1) {
+          // No marker yet — but keep last 20 chars in case it's mid-marker
+          if (this.buf.length > 20) this.buf = this.buf.slice(-20)
+          break
+        }
+        const end = this.buf.indexOf('>>>', start + 8)
+        if (end === -1) break // incomplete marker — wait for more tokens
+
+        this.currentPath = this.buf.slice(start + 8, end).trim()
+        this.buf = this.buf.slice(end + 3) // skip past >>>
+        if (this.buf.startsWith('\n')) this.buf = this.buf.slice(1) // skip leading newline
+
+        this.fileContent = ''
+        this.inFile = true
+        sendSSE(this.res, 'file_start', { type: 'file_start', path: this.currentPath })
+        sendActivity(this.res, 'file_write', `Writing ${this.currentPath}`, this.currentPath)
+      } else {
+        // Scan for <<<END_FILE>>>
+        const endIdx = this.buf.indexOf('<<<END_FILE>>>')
+        if (endIdx === -1) {
+          // No end marker — stream safe content (keep last 20 chars as potential partial marker)
+          const safeLen = Math.max(0, this.buf.length - 20)
+          if (safeLen > 0) {
+            let chunk = this.buf.slice(0, safeLen)
+            // Strip leading newline from very first content of each file
+            if (this.fileContent === '' && chunk.startsWith('\n')) chunk = chunk.slice(1)
+            if (chunk) {
+              this.fileContent += chunk
+              sendSSE(this.res, 'token', { type: 'token', text: chunk })
+            }
+            this.buf = this.buf.slice(safeLen)
+          }
+          break
+        }
+
+        // Stream the remaining content before the end marker
+        let lastChunk = this.buf.slice(0, endIdx)
+        // Strip leading newline if this is the first content written to this file
+        if (this.fileContent === '' && lastChunk.startsWith('\n')) lastChunk = lastChunk.slice(1)
+        // Strip trailing newline before <<<END_FILE>>>
+        const trimmedChunk = lastChunk.endsWith('\n') ? lastChunk.slice(0, -1) : lastChunk
+        if (trimmedChunk) {
+          this.fileContent += trimmedChunk
+          sendSSE(this.res, 'token', { type: 'token', text: trimmedChunk })
+        }
+
+        this.operations.push({
+          operation: 'write',
+          path: this.currentPath,
+          content: this.fileContent
+        })
+        sendSSE(this.res, 'file_end', { type: 'file_end', path: this.currentPath })
+
+        this.buf = this.buf.slice(endIdx + 14) // skip past <<<END_FILE>>>
+        this.inFile = false
+        this.currentPath = ''
+        this.fileContent = ''
+      }
+    }
+  }
+
+  /** Flush any remaining buffered content when stream ends */
+  flush() {
+    if (this.inFile && this.fileContent) {
+      // Unclosed file block — treat as complete anyway
+      this.operations.push({
+        operation: 'write',
+        path: this.currentPath,
+        content: this.fileContent + this.buf
+      })
+      sendSSE(this.res, 'file_end', { type: 'file_end', path: this.currentPath })
+    }
+  }
+}
+
+// ─── Main generateStream function ────────────────────────────────────────────
 
 export const generateStream = functions
   .runWith({ timeoutSeconds: 300, memory: '512MB' })
@@ -42,13 +140,14 @@ export const generateStream = functions
     res.status(200)
 
     const generationId = `gen_${Date.now()}`
-    const savedFiles: { path: string; content: string }[] = []
+    let savedFilesCount = 0
 
     try {
       // ── Auth ──────────────────────────────────────────────────────────────
       const uid = await verifyAuth(req)
+
       // Accept both POST body and query params
-      const body = req.body ?? {}
+      const body = (req.body ?? {}) as Record<string, string>
       const projectId = (body.projectId ?? req.query.projectId) as string
       const prompt = (body.prompt ?? req.query.prompt) as string
 
@@ -77,9 +176,7 @@ export const generateStream = functions
       }))
 
       if (existingFiles.length > 0) {
-        existingFiles.forEach(f => {
-          sendActivity(res, 'file_read', `Reading ${f.path}`, f.path)
-        })
+        existingFiles.forEach(f => sendActivity(res, 'file_read', `Reading ${f.path}`, f.path))
       }
 
       // ── Save user message ─────────────────────────────────────────────────
@@ -90,7 +187,9 @@ export const generateStream = functions
         createdAt: FieldValue.serverTimestamp()
       })
 
-      // ── Build system prompt ───────────────────────────────────────────────
+      // ── Build prompts ─────────────────────────────────────────────────────
+      const useHuggingFace = process.env.USE_HUGGINGFACE === 'true'
+
       const hlProxyBaseUrl = process.env.FUNCTIONS_BASE_URL
         ? `${process.env.FUNCTIONS_BASE_URL}/highlevelProxy`
         : `https://us-central1-${process.env.GCLOUD_PROJECT}.cloudfunctions.net/highlevelProxy`
@@ -100,34 +199,50 @@ export const generateStream = functions
         projectDescription: project.description as string,
         locationId: project.highLevelLocationId as string,
         existingFiles,
-        hlProxyBaseUrl
+        hlProxyBaseUrl,
+        useDelimiterFormat: useHuggingFace
       })
 
       // ── Stream from LLM ───────────────────────────────────────────────────
       sendActivity(res, 'status', 'Generating application code…')
 
       let fullResponse = ''
+      let streamOperations: FileOperation[] = []
 
-      if (process.env.USE_HUGGINGFACE === 'true') {
+      if (useHuggingFace) {
+        // ── HuggingFace path: real-time delimiter parsing ─────────────────
+        const parser = new DelimiterStreamParser(res)
         const hf = new InferenceClient(process.env.HF_TOKEN!)
+
         const stream = hf.chatCompletionStream({
           model: 'Qwen/Qwen2.5-Coder-7B-Instruct',
           max_tokens: 4096,
-          temperature: 0.7,
+          temperature: 0.3,
           top_p: 0.95,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: prompt }
           ]
         })
+
         for await (const chunk of stream) {
           const delta = chunk.choices?.[0]?.delta?.content ?? ''
           if (delta) {
             fullResponse += delta
-            sendSSE(res, 'token', { type: 'token', text: delta })
+            parser.feed(delta)
           }
         }
+
+        parser.flush()
+        streamOperations = parser.operations
+
+        // If real-time parser got no operations, fall back to full-response parse
+        if (streamOperations.length === 0) {
+          const { operations } = parseLLMResponse(fullResponse)
+          streamOperations = operations
+        }
       } else {
+        // ── Anthropic path: stream tokens, then parse response after ──────
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
         const stream = anthropic.messages.stream({
           model: 'claude-sonnet-4-6',
@@ -135,50 +250,59 @@ export const generateStream = functions
           system: systemPrompt,
           messages: [{ role: 'user', content: prompt }]
         })
+
         for await (const chunk of stream) {
           if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
-            const text = chunk.delta.text
-            fullResponse += text
-            sendSSE(res, 'token', { type: 'token', text })
+            fullResponse += chunk.delta.text
+          }
+        }
+
+        // Parse JSON response (Anthropic reliably generates valid JSON)
+        const { operations, errors } = parseLLMResponse(fullResponse)
+        if (errors.length > 0) console.warn('Parse warnings:', errors)
+        streamOperations = operations
+
+        // Send file events so frontend can show them
+        for (const op of streamOperations) {
+          if (op.operation === 'write') {
+            sendSSE(res, 'file_start', { type: 'file_start', path: op.path })
+            sendActivity(res, 'file_write', `Writing ${op.path}`, op.path)
+            // Stream the full content as one token so editor shows it
+            sendSSE(res, 'token', { type: 'token', text: op.content ?? '' })
+            sendSSE(res, 'file_end', { type: 'file_end', path: op.path })
           }
         }
       }
 
-      // ── Parse LLM response ────────────────────────────────────────────────
-      sendActivity(res, 'status', 'Processing generated files…')
-      const { operations, errors } = parseLLMResponse(fullResponse)
-
-      if (errors.length > 0) console.warn('Parse errors:', errors)
-
-      if (operations.length === 0) {
+      // ── Validate we have operations ───────────────────────────────────────
+      if (streamOperations.length === 0) {
+        const tail = fullResponse.slice(-200)
+        console.error('No operations parsed. Response tail:', JSON.stringify(tail))
         sendSSE(res, 'error', {
           type: 'error',
-          message: 'No valid file operations found in LLM response. Try rephrasing your prompt.',
+          message: 'The model did not generate any files. Try rephrasing your prompt.',
           savedFilesCount: 0
         })
         res.end()
         return
       }
 
-      // ── Persist files (one by one with SSE events) ───────────────────────
+      // ── Persist files to Firestore ────────────────────────────────────────
+      sendActivity(res, 'status', 'Saving files…')
       const batch = db.batch()
+      const savedFiles: { path: string; content: string }[] = []
 
-      for (const op of operations) {
+      for (const op of streamOperations) {
         const fileId = op.path.replace(/\//g, '__')
         const fileRef = db.collection('projects').doc(projectId).collection('files').doc(fileId)
 
         if (op.operation === 'write' && op.content !== undefined) {
-          sendSSE(res, 'file_start', { type: 'file_start', path: op.path })
-          sendActivity(res, 'file_write', `Writing ${op.path}`, op.path)
-
           batch.set(fileRef, {
             path: op.path,
             content: op.content,
             updatedAt: FieldValue.serverTimestamp()
           })
           savedFiles.push({ path: op.path, content: op.content })
-
-          sendSSE(res, 'file_end', { type: 'file_end', path: op.path })
         } else if (op.operation === 'delete') {
           sendActivity(res, 'file_delete', `Deleting ${op.path}`, op.path)
           batch.delete(fileRef)
@@ -186,36 +310,36 @@ export const generateStream = functions
       }
 
       await batch.commit()
+      savedFilesCount = savedFiles.length
 
-      // Update project timestamp
       await db.collection('projects').doc(projectId).update({
         updatedAt: FieldValue.serverTimestamp()
       })
 
-      // ── Snapshot ──────────────────────────────────────────────────────────
+      // ── Create snapshot ───────────────────────────────────────────────────
       sendActivity(res, 'status', 'Creating snapshot…')
       const allFilesMap = new Map<string, string>()
       existingFiles.forEach(f => allFilesMap.set(f.path, f.content))
       savedFiles.forEach(f => allFilesMap.set(f.path, f.content))
-      operations.filter(op => op.operation === 'delete').forEach(op => allFilesMap.delete(op.path))
+      streamOperations
+        .filter(op => op.operation === 'delete')
+        .forEach(op => allFilesMap.delete(op.path))
+
       const snapshotFiles = Array.from(allFilesMap.entries()).map(([path, content]) => ({
         path,
         content
       }))
       const snapshotId = await createSnapshot(projectId, generationId, snapshotFiles)
 
-      // ── Build summary message ─────────────────────────────────────────────
+      // ── Build & persist assistant message ─────────────────────────────────
       const writtenPaths = savedFiles.map(f => f.path)
-      const summary = buildSummary(prompt, writtenPaths, existingFiles.length > 0)
+      const summary = buildSummary(writtenPaths, existingFiles.length > 0)
 
-      // Persist assistant message with activities array
       const activities = [
-        ...existingFiles.map(f => ({
-          kind: 'file_read',
-          label: `Reading ${f.path}`,
-          path: f.path
-        })),
-        ...writtenPaths.map(p => ({ kind: 'file_write', label: `Writing ${p}`, path: p })),
+        ...(existingFiles.length > 0
+          ? existingFiles.map(f => ({ kind: 'file_read', label: `Read ${f.path}`, path: f.path }))
+          : []),
+        ...writtenPaths.map(p => ({ kind: 'file_write', label: `Wrote ${p}`, path: p })),
         { kind: 'summary', label: summary }
       ]
 
@@ -233,7 +357,7 @@ export const generateStream = functions
         type: 'complete',
         generationId,
         snapshotId,
-        filesCount: savedFiles.length,
+        filesCount: savedFilesCount,
         summary
       })
 
@@ -243,17 +367,17 @@ export const generateStream = functions
       sendSSE(res, 'error', {
         type: 'error',
         message: err instanceof Error ? err.message : 'Generation failed',
-        savedFilesCount: savedFiles.length
+        savedFilesCount
       })
       res.end()
     }
   })
 
-function buildSummary(prompt: string, files: string[], isUpdate: boolean): string {
+function buildSummary(files: string[], isUpdate: boolean): string {
   const action = isUpdate ? 'Updated' : 'Generated'
   const fileList =
     files.length <= 3
       ? files.join(', ')
-      : `${files.slice(0, 2).join(', ')} and ${files.length - 2} more file${files.length - 2 > 1 ? 's' : ''}`
-  return `${action} ${files.length} file${files.length !== 1 ? 's' : ''} (${fileList}). Your app is ready in the preview panel.`
+      : `${files.slice(0, 2).join(', ')} and ${files.length - 2} more`
+  return `${action} ${files.length} file${files.length !== 1 ? 's' : ''} (${fileList}). Your app is ready in the Preview panel.`
 }
