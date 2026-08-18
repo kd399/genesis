@@ -11,7 +11,7 @@
     "emulators": "firebase emulators:start",
     "deploy": "firebase deploy",
     "format": "prettier --write \"**/*.{js,ts,json,md,xml}\"",
-    "zip": "git archive --format=zip --output=wealthos.zip HEAD"
+    "zip": "git archive --format=zip --output=genesis.zip HEAD"
   },
   "devDependencies": {
     "@prettier/plugin-xml": "^3.4.2",
