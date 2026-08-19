@@ -11,17 +11,24 @@ export interface ParseResult {
 
 /**
  * Tries every strategy in order until one yields operations.
- * 1. Delimiter format  <<<FILE:path>>> … <<<END_FILE>>>
+ * 1. Delimiter format  <<<FILE:path>>> … <<<END_FILE>>>  (skipped when jsonOnly=true)
  * 2. JSON (direct parse after fence stripping)
  * 3. JSON (greedy bracket extraction with repair)
  * 4. JSON (line-by-line repair of unescaped strings)
+ *
+ * Pass jsonOnly=true for the Anthropic path — it is always instructed to output
+ * JSON, so attempting delimiter parsing first causes misparses when the model
+ * echoes a filename like "index.html>>>" which the loose regex can capture as
+ * a path containing ">>" plus the file content.
  */
-export function parseLLMResponse(raw: string): ParseResult {
+export function parseLLMResponse(raw: string, jsonOnly = false): ParseResult {
   const errors: string[] = []
 
   // ── Strategy 1: delimiter format ─────────────────────────────────────────
-  const delimResult = parseDelimiterFormat(raw)
-  if (delimResult.operations.length > 0) return delimResult
+  if (!jsonOnly) {
+    const delimResult = parseDelimiterFormat(raw)
+    if (delimResult.operations.length > 0) return delimResult
+  }
 
   // ── Strategy 2: JSON — strip fences + direct parse ───────────────────────
   const cleaned = stripFences(raw)
@@ -91,25 +98,26 @@ function parseDelimiterFormat(raw: string): ParseResult {
   const operations: FileOperation[] = []
   const errors: string[] = []
 
-  // Match both <<< and << variants (LLM sometimes outputs only 2 angle brackets)
-  // Also match END_FILE with 2 or 3 closing brackets
-  // Pattern: <<<FILE:path>>> or <<FILE:path>> or <<<FILE:path>>
-  const writeRe = /<<<?FILE:([^\n>]+?)>?>?>>([\s\S]*?)<<<?END_FILE>?>?>/g
+  // Match <<<FILE:path>>> (3 closing >) or <<FILE:path>> (2 closing >) exactly.
+  // Path group [^>\n]+ excludes > so it can never bleed across bracket boundaries —
+  // e.g. "<<<FILE:index.html>>>" cannot capture "index.html>>" as the path.
+  const writeRe =
+    /(?:<<<FILE:([^>\n]+)>>>|<<FILE:([^>\n]+)>>)([\s\S]*?)(?:<<<END_FILE>>>|<<END_FILE>>)/g
   let m: RegExpExecArray | null
   while ((m = writeRe.exec(raw)) !== null) {
-    const path = sanitizePath(m[1]!.trim())
+    const path = sanitizePath((m[1] ?? m[2] ?? '').trim())
     if (!path) {
       errors.push('Empty path in FILE block')
       continue
     }
-    const content = m[2]!.replace(/^\n/, '')
+    const content = (m[3] ?? '').replace(/^\n/, '')
     operations.push({ operation: 'write', path, content })
   }
 
-  // Delete operations — also flexible with bracket count
-  const deleteRe = /<<<?DELETE:([^\n>]+?)>?>?>/g
+  // Delete operations — exact bracket counts only
+  const deleteRe = /(?:<<<DELETE:([^>\n]+)>>>|<<DELETE:([^>\n]+)>>)/g
   while ((m = deleteRe.exec(raw)) !== null) {
-    const path = sanitizePath(m[1]!.trim())
+    const path = sanitizePath((m[1] ?? m[2] ?? '').trim())
     if (path) operations.push({ operation: 'delete', path })
   }
 

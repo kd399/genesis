@@ -270,8 +270,9 @@ export const generateStream = functions
         streamOperations = parser.operations
 
         // If real-time parser got no operations, fall back to full-response parse
+        // HuggingFace uses delimiter format — jsonOnly stays false (default)
         if (streamOperations.length === 0) {
-          const { operations } = parseLLMResponse(fullResponse)
+          const { operations } = parseLLMResponse(fullResponse, false)
           streamOperations = operations
         }
       } else {
@@ -342,8 +343,9 @@ export const generateStream = functions
           }
         }
 
-        // Parse the completed response
-        const { operations, errors } = parseLLMResponse(fullResponse)
+        // Parse the completed response — jsonOnly=true skips delimiter parsing,
+        // which prevents misparses when the model echoes filenames like "index.html>>>"
+        const { operations, errors } = parseLLMResponse(fullResponse, true)
         if (errors.length > 0) console.warn('Parse warnings:', errors)
         if (operations.length > 0) {
           const usedMarkdown = errors.some(e => e.includes('markdown blocks'))
