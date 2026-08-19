@@ -69,6 +69,13 @@ export function parseLLMResponse(raw: string): ParseResult {
   const regexOps = extractViaRegex(cleaned, errors)
   if (regexOps.length > 0) return { operations: regexOps, errors }
 
+  // ── Strategy 6: markdown code block extraction ────────────────────────────
+  // Handles the case where LLM ignores JSON/delimiter instructions and wraps
+  // content in markdown fences like ```html ... ``` or ```js ... ```
+  // We extract each fenced block and assign a filename based on the language tag.
+  const markdownOps = extractFromMarkdownBlocks(raw, errors)
+  if (markdownOps.length > 0) return { operations: markdownOps, errors }
+
   errors.push('Could not parse any file operations from the LLM response')
   return { operations: [], errors }
 }
@@ -84,8 +91,10 @@ function parseDelimiterFormat(raw: string): ParseResult {
   const operations: FileOperation[] = []
   const errors: string[] = []
 
-  // Write operations
-  const writeRe = /<<<FILE:([^\n>]+)>>>([\s\S]*?)<<<END_FILE>>>/g
+  // Match both <<< and << variants (LLM sometimes outputs only 2 angle brackets)
+  // Also match END_FILE with 2 or 3 closing brackets
+  // Pattern: <<<FILE:path>>> or <<FILE:path>> or <<<FILE:path>>
+  const writeRe = /<<<?FILE:([^\n>]+?)>?>?>>([\s\S]*?)<<<?END_FILE>?>?>/g
   let m: RegExpExecArray | null
   while ((m = writeRe.exec(raw)) !== null) {
     const path = sanitizePath(m[1]!.trim())
@@ -93,12 +102,12 @@ function parseDelimiterFormat(raw: string): ParseResult {
       errors.push('Empty path in FILE block')
       continue
     }
-    const content = m[2]!.replace(/^\n/, '') // strip leading newline only
+    const content = m[2]!.replace(/^\n/, '')
     operations.push({ operation: 'write', path, content })
   }
 
-  // Delete operations
-  const deleteRe = /<<<DELETE:([^\n>]+)>>>/g
+  // Delete operations — also flexible with bracket count
+  const deleteRe = /<<<?DELETE:([^\n>]+?)>?>?>/g
   while ((m = deleteRe.exec(raw)) !== null) {
     const path = sanitizePath(m[1]!.trim())
     if (path) operations.push({ operation: 'delete', path })
@@ -250,9 +259,77 @@ function extractViaRegex(raw: string, errors: string[]): FileOperation[] {
   return ops
 }
 
+/**
+ * Strategy 6: Extract content from markdown fenced code blocks.
+ * LLM sometimes ignores JSON instructions and returns:
+ *   ```html
+ *   <!DOCTYPE html>...
+ *   ```
+ * We map language tags → filenames and treat each block as a write operation.
+ */
+function extractFromMarkdownBlocks(raw: string, errors: string[]): FileOperation[] {
+  const ops: FileOperation[] = []
+
+  // Match all ``` fenced blocks, with optional language tag
+  // e.g. ```html, ```javascript, ```js, ```css, ```
+  const fenceRe = /```(\w*)\n([\s\S]*?)```/g
+  let m: RegExpExecArray | null
+  const langCount: Record<string, number> = {}
+
+  while ((m = fenceRe.exec(raw)) !== null) {
+    const lang = (m[1] ?? '').toLowerCase().trim()
+    const content = m[2] ?? ''
+
+    if (!content.trim()) continue
+
+    // Map language tag → filename
+    // If same language appears multiple times, suffix with index
+    const langKey = lang || 'html'
+    langCount[langKey] = (langCount[langKey] ?? 0) + 1
+    const idx = langCount[langKey]!
+
+    let filename: string
+    if (lang === 'html' || lang === '' || lang === 'htm') {
+      filename = idx === 1 ? 'index.html' : `page${idx}.html`
+    } else if (lang === 'javascript' || lang === 'js') {
+      filename = idx === 1 ? 'app.js' : `script${idx}.js`
+    } else if (lang === 'css') {
+      filename = idx === 1 ? 'style.css' : `style${idx}.css`
+    } else if (lang === 'typescript' || lang === 'ts') {
+      filename = idx === 1 ? 'app.ts' : `module${idx}.ts`
+    } else if (lang === 'json') {
+      filename = idx === 1 ? 'data.json' : `data${idx}.json`
+    } else {
+      // Unknown language — skip tiny snippets, treat larger ones as index.html
+      if (content.trim().length < 100) continue
+      filename = idx === 1 ? 'index.html' : `file${idx}.html`
+    }
+
+    ops.push({ operation: 'write', path: filename, content: content.trimEnd() })
+  }
+
+  if (ops.length > 0) {
+    errors.push(
+      `Warning: LLM used markdown blocks instead of JSON. Extracted ${ops.length} file(s).`
+    )
+  }
+
+  return ops
+}
+
 function sanitizePath(p: string): string {
-  return p
+  const cleaned = p
     .replace(/\.\.\//g, '')
     .replace(/^\/+/, '')
     .trim()
+
+  // Reject anything that doesn't look like a real file path.
+  // This catches the case where LLM puts HTML content in the "path" field
+  // (happens when delimiter + JSON formats are mixed in the same response).
+  if (cleaned.length > 200) return '' // too long to be a path
+  if (cleaned.includes('<')) return '' // contains HTML tags
+  if (cleaned.includes('\n')) return '' // contains newlines
+  if (!/\.[a-z]{1,10}$/i.test(cleaned)) return '' // no file extension
+
+  return cleaned
 }

@@ -184,13 +184,25 @@ export const generateStream = functions
         .limitToLast(10)
         .get()
 
-      // Only keep role+content, filter out messages with empty content
+      // Only keep role+content, filter out:
+      // 1. Empty messages
+      // 2. Assistant summary messages (plain English like "Generated 1 file...")
+      //    These are stored as chat UI labels, NOT as LLM output — sending them
+      //    back as assistant turns causes the LLM to reply in plain English
+      //    instead of producing JSON/delimiter file output.
+      const assistantSummaryRe = /^(Generated|Updated)\s+\d+\s+file/i
+
       const conversationHistory = priorMsgsSnap.docs
         .map(d => ({
           role: d.data().role as 'user' | 'assistant',
           content: (d.data().content as string) || ''
         }))
-        .filter(m => m.content.trim().length > 0)
+        .filter(m => {
+          if (!m.content.trim()) return false
+          // Drop assistant summary messages — they are UI labels, not LLM output
+          if (m.role === 'assistant' && assistantSummaryRe.test(m.content.trim())) return false
+          return true
+        })
 
       // ── Save user message ─────────────────────────────────────────────────
       await db.collection('projects').doc(projectId).collection('messages').add({
@@ -263,31 +275,43 @@ export const generateStream = functions
           streamOperations = operations
         }
       } else {
-        // ── Anthropic path: stream tokens, then parse response after ──────
+        // ── Anthropic path ────────────────────────────────────────────────
+        // We accumulate the full response silently (no raw token streaming to
+        // frontend — the LLM outputs JSON which looks ugly mid-stream and
+        // confuses the editor tabs). Progress is shown via activity events.
+        // After parsing, we stream each file's content char-by-char so the
+        // editor shows a smooth "writing" effect.
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
         // Build messages: prior turns + current user prompt
-        // Anthropic requires alternating user/assistant turns — ensure that
+        // Also strip any prior assistant messages that look like delimiter format —
+        // they confuse the model into outputting <<<FILE:..>>> instead of JSON.
+        const delimiterRe = /<<<(?:FILE|END_FILE|DELETE)/
         const historyMessages: { role: 'user' | 'assistant'; content: string }[] = []
         for (const m of conversationHistory) {
-          // Skip if same role as last to avoid consecutive same-role messages
           if (
             historyMessages.length > 0 &&
             historyMessages[historyMessages.length - 1]!.role === m.role
           )
             continue
+          // Drop assistant messages that contain delimiter syntax — they teach
+          // the LLM to use that format instead of JSON.
+          if (m.role === 'assistant' && delimiterRe.test(m.content)) continue
           historyMessages.push({ role: m.role, content: m.content })
         }
-        // Always end with the current user prompt
         if (
           historyMessages.length === 0 ||
           historyMessages[historyMessages.length - 1]!.role === 'assistant'
         ) {
           historyMessages.push({ role: 'user', content: prompt })
         } else {
-          // Last was user — replace with current (avoid double user)
           historyMessages[historyMessages.length - 1] = { role: 'user', content: prompt }
         }
+
+        // Anthropic prefill trick: append an assistant turn starting with "["
+        // This FORCES the model to continue in JSON array format — it cannot
+        // switch to delimiter or markdown because it already "started" with [
+        historyMessages.push({ role: 'assistant', content: '[' })
 
         const stream = anthropic.messages.stream({
           model: 'claude-sonnet-4-6',
@@ -296,24 +320,52 @@ export const generateStream = functions
           messages: historyMessages
         })
 
+        // Track approximate progress for the activity log
+        let charCount = 0
+        const PROGRESS_INTERVAL = 800
+
+        // Prefill "[" is already the start — prepend it to fullResponse
+        fullResponse = '['
+
+        // Send initial "thinking" status immediately so chat shows activity
+        sendSSE(res, 'status', { type: 'status', message: 'Thinking…' })
+
         for await (const chunk of stream) {
           if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
             fullResponse += chunk.delta.text
+            charCount += chunk.delta.text.length
+            // Send periodic progress so chat bubble updates live
+            if (charCount % PROGRESS_INTERVAL < chunk.delta.text.length) {
+              const kb = (charCount / 1024).toFixed(1)
+              sendSSE(res, 'status', { type: 'status', message: `Generating… ${kb}kb written` })
+            }
           }
         }
 
-        // Parse JSON response (Anthropic reliably generates valid JSON)
+        // Parse the completed response
         const { operations, errors } = parseLLMResponse(fullResponse)
         if (errors.length > 0) console.warn('Parse warnings:', errors)
+        if (operations.length > 0) {
+          const usedMarkdown = errors.some(e => e.includes('markdown blocks'))
+          if (usedMarkdown) {
+            console.warn(
+              '⚠️  LLM used markdown fences instead of JSON — extracted via fallback parser.'
+            )
+          }
+        }
         streamOperations = operations
 
-        // Send file events so frontend can show them
+        // Stream each file's content to the editor with a smooth character effect
+        const CHUNK_SIZE = 80
         for (const op of streamOperations) {
           if (op.operation === 'write') {
             sendSSE(res, 'file_start', { type: 'file_start', path: op.path })
             sendActivity(res, 'file_write', `Writing ${op.path}`, op.path)
-            // Stream the full content as one token so editor shows it
-            sendSSE(res, 'token', { type: 'token', text: op.content ?? '' })
+            const content = op.content ?? ''
+            // Send in chunks so editor shows a typewriter effect
+            for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+              sendSSE(res, 'token', { type: 'token', text: content.slice(i, i + CHUNK_SIZE) })
+            }
             sendSSE(res, 'file_end', { type: 'file_end', path: op.path })
           }
         }
@@ -321,8 +373,18 @@ export const generateStream = functions
 
       // ── Validate we have operations ───────────────────────────────────────
       if (streamOperations.length === 0) {
-        const tail = fullResponse.slice(-200)
+        const tail = fullResponse.slice(-300)
         console.error('No operations parsed. Response tail:', JSON.stringify(tail))
+        // Check if the response looks like delimiter format was used unexpectedly
+        const hasDelimiter =
+          fullResponse.includes('<<<FILE:') || fullResponse.includes('<<<END_FILE>>>')
+        const hasJsonStart = fullResponse.trimStart().startsWith('[')
+        console.error(
+          'Response format hints — hasDelimiter:',
+          hasDelimiter,
+          'hasJsonStart:',
+          hasJsonStart
+        )
         sendSSE(res, 'error', {
           type: 'error',
           message: 'The model did not generate any files. Try rephrasing your prompt.',
@@ -338,6 +400,20 @@ export const generateStream = functions
       const savedFiles: { path: string; content: string }[] = []
 
       for (const op of streamOperations) {
+        // Guard: op.path must look like a real file path, not HTML/code content.
+        // If LLM mixes delimiter + JSON formats, the path field can contain the
+        // entire file content — Firestore doc IDs max out at 1500 bytes and crash.
+        const isValidPath =
+          op.path.length <= 200 && // reasonable path length
+          /\.[a-z]{1,5}$/i.test(op.path) && // must end with an extension
+          !op.path.includes('<') && // no HTML tags
+          !op.path.includes('\n') // no newlines
+
+        if (!isValidPath) {
+          console.warn('Skipping op with invalid path (likely parse error):', op.path.slice(0, 80))
+          continue
+        }
+
         const fileId = op.path.replace(/\//g, '__')
         const fileRef = db.collection('projects').doc(projectId).collection('files').doc(fileId)
 

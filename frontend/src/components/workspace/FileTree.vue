@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { formatDate } from '@/lib/utils'
 
 const ws = useWorkspaceStore()
 
@@ -12,6 +13,8 @@ interface TreeNode {
 }
 
 const collapsedDirs = ref<Set<string>>(new Set())
+const restoringId = ref<string | null>(null)
+const showSnapshots = ref(true)
 
 function toggleDir(path: string) {
   const s = new Set(collapsedDirs.value)
@@ -66,10 +69,21 @@ function getFileIcon(name: string): string {
 }
 
 const isStreaming = computed(() => ws.generationState.isGenerating)
+
+async function handleRestore(snapshotId: string) {
+  restoringId.value = snapshotId
+  try {
+    await ws.restoreSnapshot(snapshotId)
+  } finally {
+    restoringId.value = null
+  }
+}
 </script>
 
 <template>
   <div class="h-full flex flex-col">
+
+    <!-- ── FILES section ───────────────────────────────────────── -->
     <div class="px-3 py-2 border-b flex items-center justify-between shrink-0">
       <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Files</span>
       <span v-if="ws.files.length > 0" class="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
@@ -77,7 +91,7 @@ const isStreaming = computed(() => ws.generationState.isGenerating)
       </span>
     </div>
 
-    <div class="flex-1 overflow-y-auto py-1">
+    <div class="flex-1 overflow-y-auto py-1 min-h-0">
       <!-- Empty state -->
       <div v-if="ws.files.length === 0 && !isStreaming" class="px-3 py-6 text-center">
         <div class="text-2xl mb-2">📂</div>
@@ -107,6 +121,79 @@ const isStreaming = computed(() => ws.generationState.isGenerating)
         />
       </template>
     </div>
+
+    <!-- ── SNAPSHOTS section ───────────────────────────────────── -->
+    <div class="border-t shrink-0">
+      <!-- Collapsible header -->
+      <button
+        class="w-full px-3 py-2 flex items-center justify-between hover:bg-muted/40 transition-colors"
+        @click="showSnapshots = !showSnapshots"
+      >
+        <div class="flex items-center gap-1.5">
+          <svg class="w-3 h-3 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Snapshots</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span v-if="ws.snapshots.length > 0" class="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+            {{ ws.snapshots.length }}
+          </span>
+          <svg
+            :class="['w-3 h-3 text-muted-foreground transition-transform', showSnapshots ? 'rotate-180' : '']"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+
+      <!-- Snapshot list (collapsible, max ~180px scroll) -->
+      <div v-if="showSnapshots" class="max-h-44 overflow-y-auto">
+
+        <!-- Empty -->
+        <div v-if="ws.snapshots.length === 0" class="px-3 py-3 text-center">
+          <p class="text-[10px] text-muted-foreground">No snapshots yet</p>
+          <p class="text-[10px] text-muted-foreground/60 mt-0.5">Each generation auto-saves one</p>
+        </div>
+
+        <!-- List -->
+        <div
+          v-for="(snap, i) in ws.snapshots"
+          :key="snap.id"
+          class="px-3 py-2 flex items-center justify-between gap-2 hover:bg-muted/40 transition-colors border-t border-border/40 first:border-t-0"
+        >
+          <div class="min-w-0">
+            <p class="text-[11px] font-medium truncate">Generation #{{ ws.snapshots.length - i }}</p>
+            <p class="text-[10px] text-muted-foreground truncate">
+              {{ snap.createdAt
+                  ? formatDate(snap.createdAt.toDate ? snap.createdAt.toDate() : snap.createdAt)
+                  : 'Just now' }}
+              · {{ (snap as any).filesCount ?? '?' }} files
+            </p>
+          </div>
+
+          <!-- Restore button -->
+          <button
+            class="shrink-0 flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-border hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40"
+            :disabled="restoringId === snap.id"
+            @click="handleRestore(snap.id)"
+          >
+            <svg v-if="restoringId !== snap.id" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            <svg v-else class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+            {{ restoringId === snap.id ? '' : 'Restore' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 

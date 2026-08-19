@@ -125,29 +125,44 @@ const isGenerating = computed(() => ws.generationState.isGenerating)
             <span class="text-[10px] font-medium text-muted-foreground">Genesis</span>
           </div>
 
-          <!-- Activity steps (shown while generating and after) -->
+          <!-- Typing indicator — shown immediately when generating starts,
+               before the first SSE activity arrives from the server -->
+          <div
+            v-if="isGenerating && msg.id === ws.messages[ws.messages.length - 1]?.id && (!msg.activities || msg.activities.length === 0)"
+            class="bg-muted/50 border border-border/50 rounded-xl rounded-tl-sm px-4 py-3"
+          >
+            <div class="flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 0ms"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 150ms"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style="animation-delay: 300ms"></span>
+            </div>
+          </div>
+
+          <!-- Activity steps (shown once first SSE event arrives) -->
           <div
             v-if="msg.activities && msg.activities.length > 0"
             class="bg-muted/50 border border-border/50 rounded-xl rounded-tl-sm px-3 py-2.5 space-y-1.5"
           >
-            <div
-              v-for="(activity, i) in msg.activities"
-              :key="i"
-              :class="['flex items-start gap-2 text-xs', activityClass(activity.kind)]"
-            >
-              <!-- Spinner on last activity if still generating -->
-              <span v-if="i === msg.activities.length - 1 && isGenerating && msg.id === ws.messages[ws.messages.length - 1]?.id" class="shrink-0 mt-0.5">
-                <svg class="w-3 h-3 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                </svg>
-              </span>
-              <span v-else class="shrink-0">{{ activityIcon(activity.kind) }}</span>
-              <span class="leading-relaxed break-all">
-                {{ activity.label }}
-                <span v-if="activity.path" class="ml-1 font-mono text-[10px] opacity-70">{{ activity.path }}</span>
-              </span>
-            </div>
+            <template v-for="(activity, i) in msg.activities" :key="i">
+              <!-- Skip intermediate 'status' activities — only show the last one -->
+              <div
+                v-if="activity.kind !== 'status' || i === msg.activities.length - 1 || msg.activities[i + 1]?.kind !== 'status'"
+                :class="['flex items-start gap-2 text-xs', activityClass(activity.kind)]"
+              >
+                <!-- Spinner on last activity if still generating -->
+                <span v-if="i === msg.activities.length - 1 && isGenerating && msg.id === ws.messages[ws.messages.length - 1]?.id" class="shrink-0 mt-0.5">
+                  <svg class="w-3 h-3 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                </span>
+                <span v-else class="shrink-0">{{ activityIcon(activity.kind) }}</span>
+                <span class="leading-relaxed break-all">
+                  {{ activity.label }}
+                  <span v-if="activity.path" class="ml-1 font-mono text-[10px] opacity-70">{{ activity.path }}</span>
+                </span>
+              </div>
+            </template>
           </div>
 
           <!-- Final summary text (if any and not covered by activities) -->

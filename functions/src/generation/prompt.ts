@@ -4,7 +4,7 @@ interface ProjectContext {
   locationId: string
   existingFiles: { path: string; content: string }[]
   hlProxyBaseUrl: string
-  useDelimiterFormat?: boolean // true for HuggingFace models
+  useDelimiterFormat?: boolean
 }
 
 export function buildSystemPrompt(ctx: ProjectContext): string {
@@ -16,6 +16,9 @@ export function buildSystemPrompt(ctx: ProjectContext): string {
         .join('\n\n')}`
     : '\n## Existing Project Files\nNone — this is a brand-new project.'
 
+  // Delimiter format is ONLY for HuggingFace open models.
+  // Anthropic Claude always uses JSON — it reliably produces valid JSON
+  // and mixing both formats causes parser to pick up HTML as file paths.
   const outputFormat = ctx.useDelimiterFormat
     ? buildDelimiterFormatInstructions()
     : buildJsonFormatInstructions()
@@ -38,11 +41,129 @@ NEVER call HighLevel directly. Always use our proxy:
 
   GET BASE?resource=contacts            — list contacts (add &limit=20&query=term for search)
   GET BASE?resource=conversations       — list conversations (&limit=20)
-  GET BASE?resource=appointments        — upcoming appointments (&startTime=ISO&endTime=ISO)
+  GET BASE?resource=appointments&startTime=ISO&endTime=ISO  — upcoming appointments
   GET BASE?resource=calendars           — list calendars
 
 ALL requests MUST include header:  Authorization: Bearer <token>
 Token arrives via postMessage from parent — use the bootstrap below.
+
+## EXACT API Response Shapes — parse EXACTLY as shown below
+
+### contacts response
+\`\`\`json
+{
+  "contacts": [
+    {
+      "id": "AfG4zOgQvqh5Suk4H6CJ",
+      "contactName": "kd",
+      "firstName": "kd",
+      "lastName": null,
+      "email": "kdn9567@gmail.com",
+      "phone": "+919100115240",
+      "type": "customer",
+      "tags": ["high priority", "follow-up"],
+      "dateAdded": "2026-08-18T18:06:25.756Z",
+      "country": "IN",
+      "companyName": null,
+      "assignedTo": null,
+      "dnd": false,
+      "startAfter": [1787076385756, "AfG4zOgQvqh5Suk4H6CJ"]
+    }
+  ],
+  "count": 0,
+  "meta": {
+    "total": 6,
+    "nextPageUrl": "https://...",
+    "startAfterId": "XIwde3dCfdlMJ56xE86E",
+    "startAfter": 1787059661668,
+    "currentPage": 1
+  }
+}
+\`\`\`
+- Total count is in \`data.meta.total\` — NOT \`data.count\` (count is always 0)
+- Contact display name: use \`contact.contactName\` or \`contact.firstName + ' ' + contact.lastName\`
+- Pagination: next page uses \`?startAfter=meta.startAfter&startAfterId=meta.startAfterId\`
+
+### appointments response
+\`\`\`json
+{
+  "appointments": [
+    {
+      "id": "pAjz2OorpmB2muPO76LP",
+      "calendarId": "8BFx9zlz5afzinMsUzic",
+      "contactId": "AfG4zOgQvqh5Suk4H6CJ",
+      "title": "Kd ",
+      "startTime": "2026-08-19T13:30:00+05:30",
+      "endTime": "2026-08-19T14:00:00+05:30",
+      "status": "confirmed",
+      "notes": ""
+    }
+  ]
+}
+\`\`\`
+- Array is at \`data.appointments\`
+- Always pass startTime + endTime: default to now → 7 days from now (ISO strings)
+- \`startTime\` and \`endTime\` are ISO strings with timezone offset
+
+### conversations response
+\`\`\`json
+{
+  "conversations": [
+    {
+      "id": "hfSZn8tuk5Tgvl4j8VzN",
+      "contactId": "AfG4zOgQvqh5Suk4H6CJ",
+      "fullName": "Kd",
+      "email": "kdn9567@gmail.com",
+      "phone": "+919100115240",
+      "lastMessageBody": "HI hello",
+      "lastMessageType": "TYPE_EMAIL",
+      "lastMessageDate": 1787076503824,
+      "lastMessageDirection": "outbound",
+      "unreadCount": 0,
+      "tags": [],
+      "type": "TYPE_PHONE",
+      "opportunities": [
+        { "monetaryValue": 3934, "status": "won" }
+      ]
+    }
+  ]
+}
+\`\`\`
+- Array is at \`data.conversations\`
+- \`lastMessageDate\` is Unix milliseconds — convert with \`new Date(conv.lastMessageDate)\`
+- \`opportunities\` is an array — check \`conv.opportunities && conv.opportunities.length > 0\`
+
+### calendars response
+\`\`\`json
+{
+  "calendars": [
+    { "id": "8BFx9zlz5afzinMsUzic", "name": "My Calendar", "isActive": true }
+  ]
+}
+\`\`\`
+- Array is at \`data.calendars\`
+
+## CORRECT fetch patterns (copy these exactly)
+\`\`\`js
+// Contacts — total count is in meta.total
+hlFetch('contacts', { limit: 20 }).then(function(data) {
+  var contacts = data.contacts || [];
+  var total = (data.meta && data.meta.total) ? data.meta.total : contacts.length;
+});
+
+// Appointments — always pass time range
+var now = new Date();
+var week = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+hlFetch('appointments', { startTime: now.toISOString(), endTime: week.toISOString() })
+  .then(function(data) {
+    var appts = data.appointments || [];
+  });
+
+// Conversations
+hlFetch('conversations', { limit: 20 }).then(function(data) {
+  var convs = data.conversations || [];
+});
+\`\`\`
 
 ## Runtime Bootstrap — ALWAYS include this script block in index.html inside <head>
 <script>
@@ -56,7 +177,6 @@ Token arrives via postMessage from parent — use the bootstrap below.
       window.__GENESIS_TOKEN__ = token;
       if (!__ready) {
         __ready = true;
-        // Give the page a tick to define onGenesisReady before calling it
         setTimeout(function() {
           if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
         }, 0);
@@ -102,13 +222,13 @@ Token arrives via postMessage from parent — use the bootstrap below.
 - Multiple files OK: index.html + app.js + style.css
 
 ## Code Rules
-1. Bootstrap script MUST be in <head> of index.html (shown above — copy it exactly)
-2. Set window.onGenesisReady = function() { ... } AFTER the bootstrap — this is called automatically once the auth token arrives
-3. NEVER redefine hlFetch — it is already declared globally by the bootstrap above. Just call hlFetch('contacts', {...}) directly
-4. Show animated skeleton placeholders (animate-pulse) while data loads
-5. On error: show a red banner with a Retry button that calls the fetch again
-6. The API returns real CRM data OR realistic demo data when HighLevel is not connected — the demo banner is shown automatically, no extra code needed
-7. For dashboards: summary cards (total contacts, next appointment, unread conversations)
+1. Bootstrap script MUST be in <head> of index.html (copy it exactly as shown above)
+2. Set window.onGenesisReady = function() { ... } AFTER the bootstrap
+3. NEVER redefine hlFetch — it is globally declared by the bootstrap
+4. Always use \`data.contacts || []\`, \`data.appointments || []\`, \`data.conversations || []\` — never assume a field exists
+5. Show animated skeleton placeholders (animate-pulse) while data loads
+6. On error: show a red banner with a Retry button
+7. For dashboards: summary cards using \`meta.total\` for contacts count, \`appointments.length\` for today's appointments
 8. Use Tailwind for all styling — clean, professional, card-based layout
 
 ${outputFormat}
@@ -118,8 +238,13 @@ ${existingFilesBlock}
 ## Iterative Refinement
 ${
   isUpdate
-    ? 'Existing files are shown above. MODIFY them to fulfil the new request. Include ALL files in your output (even unchanged ones) so the project stays complete.'
-    : 'New project — generate all files from scratch.'
+    ? `Existing files are shown above. Rules for modification:
+1. OUTPUT ONLY files you actually change — do NOT output files that are unchanged
+2. Example: if only modifying index.html, your JSON array has only 1 item for index.html
+3. Do NOT output app.js or style.css with empty or placeholder content
+4. Only add a new file if the request explicitly requires one
+5. YOUR ENTIRE RESPONSE MUST be the JSON array — no English explanation before or after`
+    : 'New project — generate all files from scratch. YOUR ENTIRE RESPONSE MUST be the JSON array — no English explanation, no preamble, only the file output format specified above.'
 }
 `
 }
@@ -137,66 +262,40 @@ For each file to write:
 To delete a file:
 <<<DELETE:filename.ext>>>
 
-EXAMPLE (2 files):
-<<<FILE:index.html>>>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>My App</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    var __token = null;
-    var __proxyBase = 'PROXY_URL';
-    window.addEventListener('message', function(e) {
-      if (e.data && e.data.type === 'auth-token') {
-        __token = e.data.token;
-        if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
-      }
-    });
-    function hlFetch(resource, params) {
-      var url = new URL(__proxyBase);
-      url.searchParams.set('resource', resource);
-      if (params) Object.keys(params).forEach(function(k) { url.searchParams.set(k, String(params[k])); });
-      return fetch(url.toString(), { headers: { Authorization: 'Bearer ' + __token } }).then(function(r) { return r.json(); });
-    }
-  </script>
-</head>
-<body class="bg-gray-100 p-6">
-  <div id="app">Loading...</div>
-  <script src="app.js"></script>
-</body>
-</html>
-<<<END_FILE>>>
-<<<FILE:app.js>>>
-window.onGenesisReady = function() {
-  hlFetch('contacts', { limit: 20 }).then(function(data) {
-    document.getElementById('app').innerHTML = '<p>' + data.contacts.length + ' contacts</p>';
-  });
-};
-<<<END_FILE>>>
-
-Start your response immediately with <<<FILE: — no preamble.`
+Start your response immediately with <<<FILE: — no preamble, no summary after.`
 }
 
 function buildJsonFormatInstructions(): string {
-  return `## Output Format — JSON ARRAY
+  return `## Output Format — JSON ARRAY (STRICTLY REQUIRED)
 
-Output ONLY a JSON array — NO prose, NO markdown, NO text before or after the array.
+Your ENTIRE response must be a single JSON array. No exceptions.
 
+RULES:
+- First character of your response: [
+- Last character of your response: ]
+- NO prose, NO explanation, NO markdown fences (\`\`\`), NO comments before or after
+- File content goes inside the "content" string value — escape it as valid JSON (\\n for newlines, \\" for quotes)
+- NEVER wrap your response in \`\`\`json ... \`\`\` or \`\`\`html ... \`\`\`
+
+CORRECT example (start here, nothing before the [):
 [
   {
     "operation": "write",
     "path": "index.html",
-    "content": "<!DOCTYPE html>..."
+    "content": "<!DOCTYPE html>\\n<html>\\n<head>\\n<title>App</title>\\n</head>\\n<body>\\n</body>\\n</html>"
   },
   {
     "operation": "write",
     "path": "app.js",
-    "content": "..."
+    "content": "window.onGenesisReady = function() {\\n  hlFetch('contacts', { limit: 20 }).then(function(d) {\\n    console.log(d.contacts);\\n  });\\n};"
   }
 ]
 
-Valid operations: "write" (requires path + content) | "delete" (requires path only).
-Start your response with [ and end with ]. Nothing else.`
+WRONG (do NOT do this):
+\`\`\`json
+[...]
+\`\`\`
+
+Valid operations: "write" (path + content required) | "delete" (path only).
+Your response starts with [ right now:`
 }

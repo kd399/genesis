@@ -185,6 +185,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     messages.value = [...messages.value, userMsg]
 
     // 2) Create a local in-progress assistant message bubble
+    // Add an initial 'status' activity immediately so the chat shows
+    // something is happening even before the first SSE event arrives.
     const assistantMsgId = `local_asst_${Date.now()}`
     inProgressMsgId.value = assistantMsgId
     const assistantMsg: Message = {
@@ -192,7 +194,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       projectId: projectId.value,
       role: 'assistant',
       content: '',
-      activities: [],
+      activities: [{ kind: 'status', label: 'Loading project…' }],
       createdAt: null as any
     }
     messages.value = [...messages.value, assistantMsg]
@@ -281,7 +283,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     switch (event.type) {
       case 'status':
         generationState.value.status = event.message
-        addActivity({ kind: 'status', label: event.message })
+        // Update the last status activity instead of adding a new one each time
+        // to avoid flooding the chat with "Generating... 500 chars" messages
+        updateInProgressMessage(msg => {
+          const acts = msg.activities ?? []
+          const lastIdx = acts.length - 1
+          if (lastIdx >= 0 && acts[lastIdx]!.kind === 'status') {
+            // Replace last status
+            msg.activities = [...acts.slice(0, lastIdx), { kind: 'status', label: event.message }]
+          } else {
+            msg.activities = [...acts, { kind: 'status', label: event.message }]
+          }
+        })
         break
 
       case 'activity':
@@ -295,7 +308,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         streamingFileContents.value = { ...streamingFileContents.value, [path]: '' }
         activeStreamFile.value = path
         activeFilePath.value = path
-        addActivity({ kind: 'file_write', label: `Creating ${path}`, path })
         break
       }
 
@@ -312,7 +324,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
       case 'file_end':
         generationState.value.currentFile = null
-        // Keep the streamed content until Firestore catches up
+        activeStreamFile.value = null
         break
 
       case 'complete': {
@@ -320,6 +332,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         const summary = event.summary || `Generated ${event.filesCount} file(s) successfully.`
         updateInProgressMessage(msg => {
           msg.content = summary
+          // Remove all status activities, keep file_read/write, add summary
           msg.activities = [
             ...(msg.activities ?? []).filter(a => a.kind !== 'status'),
             { kind: 'summary', label: summary }

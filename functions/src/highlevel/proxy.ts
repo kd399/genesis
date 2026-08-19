@@ -5,6 +5,12 @@ import { setCors } from '../cors'
 import { listContacts } from './contacts'
 import { listConversations } from './conversations'
 import { getAppointments, listCalendars } from './calendars'
+import {
+  getDummyContacts,
+  getDummyConversations,
+  getDummyAppointments,
+  getDummyCalendars
+} from './dummy'
 
 /**
  * Proxy endpoint for generated apps.
@@ -30,7 +36,22 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
 
     // ── Not connected: return dummy data ────────────────────────────────────
     if (!isConnected) {
-      res.status(400).json({ error: `Unknown resource: ${resource}` })
+      switch (resource) {
+        case 'contacts':
+          res.json(getDummyContacts(req.query.query as string | undefined))
+          break
+        case 'conversations':
+          res.json(getDummyConversations())
+          break
+        case 'appointments':
+          res.json(getDummyAppointments())
+          break
+        case 'calendars':
+          res.json(getDummyCalendars())
+          break
+        default:
+          res.status(400).json({ error: `Unknown resource: ${resource}` })
+      }
       return
     }
 
