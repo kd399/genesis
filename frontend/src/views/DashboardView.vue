@@ -62,10 +62,6 @@ function openProject(id: string) {
             <span class="text-sm text-muted-foreground hidden sm:block">{{ hlStore.locationName }}</span>
             <Badge variant="success" class="hidden sm:flex">HighLevel Connected</Badge>
           </div>
-          <div v-else class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-muted-foreground/40" />
-            <span class="text-xs text-muted-foreground hidden sm:block">Demo mode</span>
-          </div>
 
           <span class="text-sm text-muted-foreground hidden md:block">{{ authStore.user?.email }}</span>
           <Button variant="ghost" size="sm" @click="handleLogout">Logout</Button>
@@ -78,7 +74,7 @@ function openProject(id: string) {
 
       <!-- HL Connection Banner — optional, not blocking -->
       <div
-        v-if="!hlStore.isConnected && !hlStore.loading"
+        v-if="(!hlStore.isConnected && !hlStore.loading)"
         class="mb-6 rounded-xl border border-dashed border-border bg-muted/30 p-4 flex items-center justify-between gap-4"
       >
         <div class="flex items-start gap-3">
@@ -91,7 +87,7 @@ function openProject(id: string) {
           <div>
             <p class="font-medium text-sm">HighLevel not connected</p>
             <p class="text-xs text-muted-foreground mt-0.5">
-              You can still build and preview apps using <strong>demo data</strong>. Connect HighLevel anytime to use real CRM data.
+              You can still build and preview apps. Connect HighLevel anytime to use real CRM data.
             </p>
           </div>
         </div>
@@ -110,11 +106,10 @@ function openProject(id: string) {
           <h1 class="text-2xl font-bold">Projects</h1>
           <p class="text-sm text-muted-foreground mt-1">
             Build AI-powered HighLevel apps
-            <span v-if="!hlStore.isConnected" class="text-orange-500"> · Demo mode</span>
           </p>
         </div>
         <!-- New Project is ALWAYS enabled — no HL requirement -->
-        <Button @click="showCreateDialog = true">
+        <Button @click="showCreateDialog = true" :disabled="!hlStore.isConnected">
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
           </svg>
@@ -138,7 +133,7 @@ function openProject(id: string) {
         </div>
         <h3 class="font-medium text-sm">No projects yet</h3>
         <p class="text-xs text-muted-foreground mt-1 mb-4">Create your first AI-powered HighLevel app</p>
-        <Button size="sm" @click="showCreateDialog = true">Create Project</Button>
+        <Button size="sm" @click="showCreateDialog = true" :disabled="!hlStore.isConnected">Create Project</Button>
       </div>
 
       <!-- Project Grid -->
