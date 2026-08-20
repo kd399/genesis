@@ -9,7 +9,8 @@ out
 
 # Environment
 .env
-.env.*
+.env.production
+.env.local
 
 # OS
 .DS_Store
@@ -26,3 +27,5 @@ desktop.ini
 *.logs
 *.log
 functions/lib
+
+temp

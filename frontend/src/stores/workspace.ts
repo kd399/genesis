@@ -35,6 +35,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   // The local "in-progress" assistant message id (shown while generating)
   const inProgressMsgId = ref<string | null>(null)
+  // Epoch ms when current generation started — used to ignore pre-existing remote assistant msgs
+  const inProgressStartTime = ref<number | null>(null)
 
   let filesUnsub: (() => void) | null = null
   let messagesUnsub: (() => void) | null = null
@@ -112,13 +114,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
           createdAt: d.data().createdAt
         })) as Message[]
 
-        // If Firestore now has an assistant message that postdates our local user msg,
-        // the backend has finished — drop the local in-progress bubble immediately.
+        // If Firestore now has a NEW assistant message (created after this generation
+        // started), the backend has finished — drop the local in-progress bubble.
+        // We compare createdAt (Firestore Timestamp) against inProgressStartTime so
+        // that pre-existing assistant messages from earlier generations are ignored.
         if (inProgressMsgId.value) {
-          const hasRemoteAssistant = remote.some(m => m.role === 'assistant' && m.createdAt)
-          if (hasRemoteAssistant) {
+          const startMs = inProgressStartTime.value ?? 0
+          const hasNewRemoteAssistant = remote.some(m => {
+            if (m.role !== 'assistant' || !m.createdAt) return false
+            // Firestore Timestamp has .toMillis(); plain Date has .getTime()
+            const msgMs =
+              typeof (m.createdAt as any).toMillis === 'function'
+                ? (m.createdAt as any).toMillis()
+                : new Date(m.createdAt as any).getTime()
+            return msgMs >= startMs
+          })
+          if (hasNewRemoteAssistant) {
             // Backend saved the real assistant message — discard local bubble
             inProgressMsgId.value = null
+            inProgressStartTime.value = null
             messages.value = remote
           } else {
             // Still generating — keep local bubble at the end
@@ -189,6 +203,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     // something is happening even before the first SSE event arrives.
     const assistantMsgId = `local_asst_${Date.now()}`
     inProgressMsgId.value = assistantMsgId
+    // Record the wall-clock time so the Firestore listener can tell old vs new assistant msgs
+    inProgressStartTime.value = Date.now()
     const assistantMsg: Message = {
       id: assistantMsgId,
       projectId: projectId.value,
@@ -259,6 +275,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       // Set a 5s safety-net timeout in case the listener misses the event
       setTimeout(() => {
         inProgressMsgId.value = null
+        inProgressStartTime.value = null
       }, 5000)
       await fetchSnapshots()
     }
@@ -381,6 +398,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     streamingFileContents.value = {}
     activeStreamFile.value = null
     inProgressMsgId.value = null
+    inProgressStartTime.value = null
   }
 
   return {

@@ -43,12 +43,14 @@ export const useHighLevelStore = defineStore('highlevel', () => {
     // Per HL docs: use Install Link from App Auth pane → Advanced Settings
     // We pass state=firebaseUid so our CF callback links HL to the right Firebase user
     const installBaseUrl = import.meta.env.VITE_HIGHLEVEL_INSTALL_URL
+    const appVersionId = import.meta.env.VITE_HIGHLEVEL_APP_VERSION_ID
     const redirectUri = import.meta.env.VITE_HIGHLEVEL_REDIRECT_URI
 
     if (installBaseUrl) {
       const url = new URL(installBaseUrl)
       url.searchParams.set('state', firebaseUid)
       url.searchParams.set('redirect_uri', redirectUri)
+      url.searchParams.set('version_id', appVersionId)
       return url.toString()
     }
 
@@ -68,6 +70,7 @@ export const useHighLevelStore = defineStore('highlevel', () => {
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
+      version_id: appVersionId,
       redirect_uri: redirectUri,
       scope: scopes,
       state: firebaseUid

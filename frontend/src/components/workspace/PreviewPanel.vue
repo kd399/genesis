@@ -103,6 +103,10 @@ async function refreshPreview() {
 async function injectToken() {
   if (!iframeEl.value?.contentWindow) return
   try {
+    if (!auth.currentUser) {
+      throw new Error('User is not authenticated')
+    }
+
     const token = await getIdToken(auth.currentUser)
 
     // Post message — picked up by the 'message' listener in the bootstrap
