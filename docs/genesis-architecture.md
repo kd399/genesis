@@ -19,12 +19,15 @@
 11. [Authentication Flow](#11-authentication-flow)
 12. [LLM Response Parsing Pipeline](#12-llm-response-parsing-pipeline)
 13. [Snapshot System](#13-snapshot-system)
-14. [State Management (Pinia Stores)](#14-state-management-pinia-stores)
-15. [Security Model](#15-security-model)
-16. [Deployment Architecture](#16-deployment-architecture)
-17. [Key Design Decisions](#17-key-design-decisions)
-18. [Environment Variables Reference](#18-environment-variables-reference)
-19. [API Reference](#19-api-reference)
+14. [Diff View System](#14-diff-view-system)
+15. [Rate Limiting](#15-rate-limiting)
+16. [Dummy Data Fallback](#16-dummy-data-fallback)
+17. [State Management (Pinia Stores)](#17-state-management-pinia-stores)
+18. [Security Model](#18-security-model)
+19. [Deployment Architecture](#19-deployment-architecture)
+20. [Key Design Decisions](#20-key-design-decisions)
+21. [Environment Variables Reference](#21-environment-variables-reference)
+22. [API Reference](#22-api-reference)
 
 ---
 
@@ -44,12 +47,14 @@ User types prompt → AI generates code → Files saved to Firestore
 | Layer          | Technology                                                           |
 | -------------- | -------------------------------------------------------------------- |
 | Frontend       | Vue 3 (Composition API), Pinia, Vue Router, Tailwind CSS, TypeScript |
+| UI Components  | ShadCN for Vue (shadcn-vue), Radix Vue, Lucide Icons                 |
+| Code Editor    | Monaco Editor (`@guolao/vue-monaco-editor`)                          |
 | Backend        | Firebase Cloud Functions (Node.js 20, TypeScript)                    |
 | Database       | Cloud Firestore                                                      |
 | Auth           | Firebase Authentication (Email/Password)                             |
 | AI — Primary   | Anthropic Claude (`claude-sonnet-4-6`)                               |
 | AI — Secondary | HuggingFace `Qwen/Qwen2.5-Coder-7B-Instruct` (optional)              |
-| CRM            | HighLevel API v2 via `leadconnectorhq.com`                           |
+| CRM            | HighLevel API v2 via `services.leadconnectorhq.com`                  |
 | Hosting        | Firebase Hosting (frontend) + Cloud Functions (backend)              |
 
 ---
@@ -61,7 +66,8 @@ graph TB
     subgraph Browser["Browser (Vue 3 SPA)"]
         UI[WorkspaceView]
         Chat[ChatPanel]
-        Editor[CodeEditor]
+        Editor[CodeEditor / Monaco]
+        DiffV[DiffView]
         Preview[PreviewPanel / iframe]
         Stores[Pinia Stores]
     end
@@ -117,28 +123,29 @@ genesis/
 ├── frontend/                    # Vue 3 SPA
 │   └── src/
 │       ├── assets/
-│       │   └── globals.css          # Tailwind base + CSS vars
+│       │   └── globals.css          # Tailwind base + ShadCN CSS variables
 │       ├── components/
 │       │   ├── ui/                  # Button, Input, Badge, Card, Label
 │       │   ├── dashboard/
 │       │   │   └── CreateProjectDialog.vue
 │       │   └── workspace/
-│       │       ├── ChatPanel.vue        # Prompt input + message list
-│       │       ├── CodeEditor.vue       # Read-only code viewer
+│       │       ├── ChatPanel.vue        # Prompt input + message list + activity bubbles
+│       │       ├── CodeEditor.vue       # Monaco-based code viewer (read-only during stream)
+│       │       ├── DiffView.vue         # Full-screen LCS-based side-by-side diff viewer
 │       │       ├── FileTree.vue         # Left sidebar file navigator
-│       │       ├── PreviewPanel.vue     # iframe srcdoc preview
-│       │       └── SnapshotDrawer.vue   # Restore prior generations
+│       │       ├── PreviewPanel.vue     # iframe srcdoc preview + token injection
+│       │       └── SnapshotDrawer.vue   # Restore prior generation snapshots
 │       ├── router/
-│       │   └── index.ts             # Vue Router + auth guards
+│       │   └── index.ts             # Vue Router + requiresAuth / requiresGuest guards
 │       ├── services/
 │       │   └── firebase.ts          # Firebase app + Firestore + Auth init
 │       ├── stores/
 │       │   ├── auth.ts              # Firebase Auth state
-│       │   ├── highlevel.ts         # HL connection status + OAuth URL
+│       │   ├── highlevel.ts         # HL connection status + OAuth URL builder
 │       │   ├── projects.ts          # Project list CRUD
-│       │   └── workspace.ts         # Files, messages, SSE stream, generation
+│       │   └── workspace.ts         # Files, messages, SSE stream, diff, generation
 │       ├── types/
-│       │   └── index.ts             # All TypeScript interfaces + SSEEvent union
+│       │   └── index.ts             # All TypeScript interfaces + SSEEvent union type
 │       └── views/
 │           ├── LoginView.vue
 │           ├── SignupView.vue
@@ -146,34 +153,36 @@ genesis/
 │           ├── WorkspaceView.vue
 │           └── OAuthCallbackView.vue
 │
-├── functions/src/               # Firebase Cloud Functions
+├── functions/src/               # Firebase Cloud Functions (Node 20, TypeScript)
 │   ├── admin.ts                 # firebase-admin init (db, auth exports)
-│   ├── cors.ts                  # CORS middleware — wildcard, all origins
-│   ├── index.ts                 # Function exports (entry point)
+│   ├── cors.ts                  # CORS middleware — wildcard, all origins, 24h preflight cache
+│   ├── index.ts                 # Function export entry point
+│   ├── rateLimit.ts             # Firestore-backed sliding-window rate limiter
+│   ├── secrets.ts               # Firebase Secret Manager param declarations (defineSecret)
 │   ├── auth/
 │   │   └── middleware.ts        # verifyAuth — extracts + validates Firebase ID token
 │   ├── generation/
 │   │   ├── index.ts             # generateStream — SSE endpoint + LLM orchestration
 │   │   ├── parser.ts            # parseLLMResponse — 6-strategy fallback parser
-│   │   └── prompt.ts            # buildSystemPrompt — HL context + output format
+│   │   └── prompt.ts            # buildSystemPrompt — HL context + output format instructions
 │   ├── files/
 │   │   └── index.ts             # listFiles, getFile, saveFile
 │   ├── highlevel/
-│   │   ├── client.ts            # createHLClient — Axios + auto token refresh
-│   │   ├── contacts.ts          # listContacts
-│   │   ├── conversations.ts     # listConversations
-│   │   ├── calendars.ts         # getAppointments, listCalendars
+│   │   ├── client.ts            # createHLClient — Axios instance + auto token refresh interceptor
+│   │   ├── contacts.ts          # listContacts, createContact, updateContact
+│   │   ├── conversations.ts     # listConversations, getMessages, sendMessage
+│   │   ├── calendars.ts         # listCalendars, getAppointments, getAvailability
 │   │   ├── oauth.ts             # hlOAuthCallback + refreshHighLevelToken
-│   │   ├── proxy.ts             # highlevelProxy — unified HL data endpoint
+│   │   ├── proxy.ts             # highlevelProxy — unified HL data endpoint for generated apps
 │   │   └── dummy.ts             # getDummyContacts/Conversations/Appointments/Calendars
 │   ├── projects/
 │   │   └── index.ts             # listProjects, createProject, updateProject, deleteProject
 │   └── snapshots/
-│       └── index.ts             # listSnapshots, restoreSnapshot, createSnapshot
+│       └── index.ts             # listSnapshots, restoreSnapshot, createSnapshot (internal)
 │
 ├── firestore.rules              # Security rules — user-scoped ownership checks
 ├── firestore.indexes.json       # Composite indexes for ordered queries
-├── firebase.json                # Hosting rewrite rules + function regions
+├── firebase.json                # Hosting rewrite rules + emulator config
 └── package.json                 # Root workspace
 ```
 
@@ -221,20 +230,22 @@ graph LR
         subgraph ChatCol["ChatPanel (w-72 / w-80)"]
             MsgList[Message list\nonSnapshot real-time]
             Prompt[Prompt textarea]
-            BubbleAI[AI bubble\nactivities + status]
+            BubbleAI[AI bubble\nactivities + status log]
         end
         subgraph CodeCol["Code Panel (flex-1)"]
             FileTree[FileTree\nleft sidebar]
-            CodeEditor[CodeEditor\nread-only viewer]
+            CodeEditor[Monaco CodeEditor\nread-only during stream\ntypewriter token effect]
         end
         subgraph PreviewCol["PreviewPanel (w-380 / w-440)"]
-            IFrame["iframe\nsrcdoc=assembled HTML"]
-            ReloadBtn[Reload / Fullscreen]
+            IFrame["iframe\nsrcdoc=assembled HTML\nJS+CSS inlined"]
+            ReloadBtn[Refresh / Fullscreen]
         end
     end
+
+    DiffView["DiffView (fixed full-screen overlay)\nLCS side-by-side diff\nper-file file list sidebar"]
 ```
 
-All three panels can be toggled on/off. **Fullscreen mode** hides chat + code panels entirely.
+All three panels can be toggled on/off via header buttons. **Fullscreen mode** hides chat + code panels. **DiffView** renders as a fixed full-screen overlay, activated automatically after each generation that modifies existing files.
 
 ---
 
@@ -245,7 +256,7 @@ graph TD
     Auth[auth store\nFirebase user state]
     HL[highlevel store\nHL connection + OAuth URL]
     Projects[projects store\nproject list CRUD]
-    Workspace[workspace store\nfiles · messages · generation · streaming]
+    Workspace[workspace store\nfiles · messages · generation · streaming · diff]
 
     WorkspaceView --> Auth
     WorkspaceView --> HL
@@ -260,6 +271,7 @@ graph TD
     CodeEditor --> Workspace
     PreviewPanel --> Workspace
     SnapshotDrawer --> Workspace
+    DiffView --> Workspace
 ```
 
 ---
@@ -273,28 +285,32 @@ stateDiagram-v2
     Idle --> Generating : generate(prompt)
 
     state Generating {
-        [*] --> LocalBubble : add local assistant msg
-        LocalBubble --> StreamingSSE : fetch /generateStream
-        StreamingSSE --> StreamingSSE : SSE status/activity/token events
+        [*] --> LocalBubble : add local user msg + local assistant bubble
+        LocalBubble --> StreamingSSE : POST /generateStream
+        StreamingSSE --> StreamingSSE : SSE status/activity/token/file_start/file_end events
         StreamingSSE --> Complete : SSE complete event
-        StreamingSSE --> Error : SSE error / network fail
+        StreamingSSE --> Error : SSE error / AbortError
     }
 
-    Complete --> Idle : Firestore snapshot fires\n→ inProgressMsgId cleared
+    Complete --> DiffOpen : computeDiffs()\nif existingFiles.length > 0
+    DiffOpen --> Idle : Firestore snapshot fires\n→ inProgressMsgId cleared
     Error --> Idle : error shown in bubble
-    Generating --> Idle : abortGeneration()
+    Generating --> Idle : abortGeneration() — AbortController.abort()
 ```
 
 **Key refs in workspace store:**
 
-| Ref                     | Type                     | Purpose                                                                                        |
-| ----------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `messages`              | `Message[]`              | Merged Firestore remote + local in-progress bubble                                             |
-| `inProgressMsgId`       | `string \| null`         | ID of local assistant bubble shown during generation                                           |
-| `inProgressStartTime`   | `number \| null`         | Epoch ms when generation started — used to distinguish new vs old Firestore assistant messages |
-| `streamingFileContents` | `Record<string, string>` | Live file content accumulating from SSE token events                                           |
-| `activeStreamFile`      | `string \| null`         | Which file is currently receiving token chunks                                                 |
-| `generationState`       | `GenerationState`        | `isGenerating`, `status`, `error`, `currentFile`                                               |
+| Ref                     | Type                      | Purpose                                                                                        |
+| ----------------------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `messages`              | `Message[]`               | Merged Firestore remote + local in-progress bubble                                             |
+| `inProgressMsgId`       | `string \| null`          | ID of local assistant bubble shown during generation                                           |
+| `inProgressStartTime`   | `number \| null`          | Epoch ms when generation started — used to distinguish new vs old Firestore assistant messages |
+| `streamingFileContents` | `Record<string, string>`  | Live file content accumulating from SSE token events                                           |
+| `activeStreamFile`      | `string \| null`          | Which file is currently receiving token chunks                                                 |
+| `generationState`       | `GenerationState`         | `isGenerating`, `status`, `error`, `currentFile`                                               |
+| `filesBeforeGeneration` | `{path,content}[]`        | Snapshot of files captured before generation starts — used for diff computation                |
+| `diffView`              | `DiffViewState`           | `isOpen`, `generationId`, `diffs[]`, `selectedPath`                                            |
+| `abortController`       | `AbortController \| null` | Allows mid-generation cancellation via `abortGeneration()`                                     |
 
 ---
 
@@ -302,20 +318,20 @@ stateDiagram-v2
 
 ### 5.1 Function Inventory
 
-| Function          | Trigger      | Auth                  | Purpose                                            |
-| ----------------- | ------------ | --------------------- | -------------------------------------------------- |
-| `generateStream`  | HTTPS POST   | Firebase ID token     | Main AI generation — SSE stream                    |
-| `highlevelProxy`  | HTTPS GET    | Firebase ID token     | Proxy all HL CRM API calls from generated apps     |
-| `hlOAuthCallback` | HTTPS GET    | None (OAuth redirect) | Exchange HL auth code → tokens, store in Firestore |
-| `listProjects`    | HTTPS GET    | Firebase ID token     | List user's projects                               |
-| `createProject`   | HTTPS POST   | Firebase ID token     | Create new project                                 |
-| `updateProject`   | HTTPS PATCH  | Firebase ID token     | Rename / re-describe project                       |
-| `deleteProject`   | HTTPS DELETE | Firebase ID token     | Soft-delete (sets `deletedAt`)                     |
-| `listFiles`       | HTTPS GET    | Firebase ID token     | List files in a project                            |
-| `getFile`         | HTTPS GET    | Firebase ID token     | Get single file content                            |
-| `saveFile`        | HTTPS POST   | Firebase ID token     | Upsert a file manually                             |
-| `listSnapshots`   | HTTPS GET    | Firebase ID token     | List past generation snapshots                     |
-| `restoreSnapshot` | HTTPS POST   | Firebase ID token     | Restore all files to a past snapshot               |
+| Function          | Trigger      | Auth                  | Purpose                                                   |
+| ----------------- | ------------ | --------------------- | --------------------------------------------------------- |
+| `generateStream`  | HTTPS POST   | Firebase ID token     | Main AI generation — SSE stream (512MB, 300s timeout)     |
+| `highlevelProxy`  | HTTPS GET    | Firebase ID token     | Proxy all HL CRM API calls from generated apps            |
+| `hlOAuthCallback` | HTTPS GET    | None (OAuth redirect) | Exchange HL auth code → tokens, store in Firestore        |
+| `listProjects`    | HTTPS GET    | Firebase ID token     | List user's non-deleted projects                          |
+| `createProject`   | HTTPS POST   | Firebase ID token     | Create new project                                        |
+| `updateProject`   | HTTPS PATCH  | Firebase ID token     | Rename / re-describe project                              |
+| `deleteProject`   | HTTPS DELETE | Firebase ID token     | Soft-delete (sets `deletedAt`)                            |
+| `listFiles`       | HTTPS GET    | Firebase ID token     | List files in a project (path ordered)                    |
+| `getFile`         | HTTPS GET    | Firebase ID token     | Get single file content                                   |
+| `saveFile`        | HTTPS POST   | Firebase ID token     | Upsert a file manually (also updates project `updatedAt`) |
+| `listSnapshots`   | HTTPS GET    | Firebase ID token     | List last 20 generation snapshots                         |
+| `restoreSnapshot` | HTTPS POST   | Firebase ID token     | Restore all files to a past snapshot (batch write)        |
 
 ---
 
@@ -348,36 +364,92 @@ sequenceDiagram
 flowchart TD
     Start([POST /generateStream]) --> CORS[setCors headers]
     CORS --> Auth[verifyAuth → uid]
-    Auth --> LoadProject[Load project from Firestore\nverify ownership]
+    Auth --> RateCheck[checkRateLimit\n10 req/min per uid\nFirestore sliding window]
+    RateCheck -- exceeded --> RateError[SSE error event\n→ res.end]
+    RateCheck -- allowed --> LoadProject[Load project from Firestore\nverify ownership]
     LoadProject --> LoadFiles[Load existing files\n→ send file_read activities]
     LoadFiles --> LoadHistory[Load last 10 messages\nfilter summaries + delimiter artifacts]
     LoadHistory --> SaveUserMsg[Save user message to Firestore]
-    SaveUserMsg --> BuildPrompt[buildSystemPrompt\nHL context + output format]
+    SaveUserMsg --> BuildPrompt[buildSystemPrompt\nHL context + proxy URL + output format]
 
     BuildPrompt --> LLMChoice{USE_HUGGINGFACE?}
 
-    LLMChoice -- "true\nDelimiter format" --> HF[HuggingFace stream\nQwen2.5-Coder-7B\nDelimiterStreamParser\nreal-time file events]
-    LLMChoice -- "false\nJSON format" --> AN[Anthropic stream\nclaude-sonnet-4-6\naccumulate full response\nsimulate typewriter]
+    LLMChoice -- "true\nDelimiter format" --> HF[HuggingFace stream\nQwen2.5-Coder-7B\nDelimiterStreamParser\nreal-time file_start/token/file_end events]
+    LLMChoice -- "false\nJSON format" --> AN[Anthropic stream\nclaude-sonnet-4-6\nassistant prefill '['\naccumulate full response\nperiodic kb progress SSE\nthen typewriter replay]
 
     HF --> Parse1[parseLLMResponse\ndelimiter → JSON fallback]
     AN --> Parse2[parseLLMResponse\njsonOnly=true]
 
-    Parse1 --> ValidateOps[Validate operations\npath length ≤200\nmust have extension\nno HTML chars]
+    Parse1 --> ValidateOps[Validate operations\npath.length ≤200\nmust have extension\nno < or newlines in path]
     Parse2 --> ValidateOps
 
     ValidateOps --> BatchWrite[Firestore batch.commit\nwrite/delete files]
     BatchWrite --> UpdateProject[Update project.updatedAt]
-    UpdateProject --> CreateSnapshot[createSnapshot\nall files at this point]
+    UpdateProject --> CreateSnapshot[createSnapshot\nmerge existing + new − deleted]
     CreateSnapshot --> SaveAssistantMsg[Save assistant message\nwith activities array]
-    SaveAssistantMsg --> SendComplete[SSE complete event]
+    SaveAssistantMsg --> SendComplete[SSE complete event\n{generationId, snapshotId, filesCount, summary}]
     SendComplete --> End([res.end])
 ```
 
 ---
 
-## 6. Data Flow — Generation Pipeline
+### 5.4 HighLevel API Client
 
-This is the most complex flow in the system — from user prompt to live preview.
+`highlevel/client.ts` creates a per-request Axios instance with two interceptors:
+
+1. **Request interceptor** — calls `refreshHighLevelToken(userId)` before every request, auto-injecting a fresh Bearer token. Token is refreshed if within 5 minutes of expiry.
+2. **Response interceptor** — catches 401 responses, retries once with a freshly refreshed token (handles race conditions where token expired mid-request). Throws after one retry.
+
+```mermaid
+sequenceDiagram
+    participant Proxy as highlevelProxy
+    participant Client as createHLClient
+    participant OAuth as refreshHighLevelToken
+    participant HL as HighLevel API
+
+    Proxy->>Client: createHLClient(uid)
+    Client->>Client: axios.create() with interceptors
+
+    Proxy->>Client: client.get('/contacts/', { params })
+    Client->>OAuth: refreshHighLevelToken(uid)
+    OAuth->>OAuth: Check expiresAt - 5min buffer
+    alt token fresh
+        OAuth-->>Client: existing accessToken
+    else token expired
+        OAuth->>HL: POST /oauth/token\ngrant_type=refresh_token
+        HL-->>OAuth: new access_token + refresh_token
+        OAuth->>Firestore: update connection doc
+        OAuth-->>Client: new accessToken
+    end
+    Client->>HL: GET /contacts/ with Bearer token
+    HL-->>Client: contacts data
+    Client-->>Proxy: response
+```
+
+---
+
+### 5.5 Secrets Management
+
+Secrets are declared using Firebase Functions `defineSecret` in `functions/src/secrets.ts`:
+
+```typescript
+export const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY')
+export const HIGHLEVEL_CLIENT_ID = defineSecret('HIGHLEVEL_CLIENT_ID')
+export const HIGHLEVEL_CLIENT_SECRET = defineSecret('HIGHLEVEL_CLIENT_SECRET')
+export const HF_TOKEN = defineSecret('HF_TOKEN')
+```
+
+In production, secrets are set via:
+
+```bash
+firebase functions:secrets:set ANTHROPIC_API_KEY
+```
+
+In local development, they are read from `functions/.env` (never committed — see `.env.example`).
+
+---
+
+## 6. Data Flow — Generation Pipeline
 
 ```mermaid
 sequenceDiagram
@@ -392,372 +464,218 @@ sequenceDiagram
     User->>ChatPanel: types prompt, hits Enter
 
     ChatPanel->>WorkspaceStore: generate(prompt)
-    WorkspaceStore->>WorkspaceStore: add local user bubble\nadd local assistant bubble\n(activities: ['Loading project…'])
+    WorkspaceStore->>WorkspaceStore: capture filesBeforeGeneration\nadd local user bubble\nadd local assistant bubble\n(activities: ['Loading project…'])
 
     WorkspaceStore->>generateStream: POST /generateStream\n{ projectId, prompt }\nBearer <ID token>
 
     generateStream->>Firestore: load project + existing files\n+ last 10 messages
     generateStream-->>WorkspaceStore: SSE: activity file_read (each file)
+    generateStream->>Firestore: save user message
+    generateStream->>Anthropic: messages.stream()\n[prefill '[' forces JSON output]
 
-    generateStream->>Anthropic: messages.stream()\nsystem prompt + history + prefill '['
-
-    loop LLM streaming
-        Anthropic-->>generateStream: token chunks (JSON building)
-        generateStream-->>WorkspaceStore: SSE: status 'Generating… Xkb'
-        WorkspaceStore->>WorkspaceStore: update last status in assistant bubble
+    loop Token streaming
+        Anthropic-->>generateStream: content_block_delta
+        generateStream-->>WorkspaceStore: SSE: status (kb progress)
     end
 
-    generateStream->>generateStream: parseLLMResponse(fullResponse)
+    generateStream->>generateStream: parseLLMResponse\n(jsonOnly=true for Anthropic)
 
-    loop Each parsed file
-        generateStream-->>WorkspaceStore: SSE: file_start { path }
-        WorkspaceStore->>WorkspaceStore: streamingFileContents[path] = ''
-        generateStream-->>WorkspaceStore: SSE: token chunks (80-char chunks)
-        WorkspaceStore->>WorkspaceStore: accumulate token into streamingFileContents
-        WorkspaceStore->>WorkspaceStore: editorContent computed = streaming content
-        generateStream-->>WorkspaceStore: SSE: file_end { path }
+    loop Per file operation
+        generateStream-->>WorkspaceStore: SSE: file_start → tokens → file_end\n(typewriter char-by-char replay)
+        WorkspaceStore->>WorkspaceStore: streamingFileContents[path] += chunk\neditorContent computed → Monaco updates live
     end
 
-    generateStream->>Firestore: batch.set all files\ncreateSnapshot\nsave assistant message
+    generateStream->>Firestore: batch.commit (write/delete files)
+    generateStream->>Firestore: update project.updatedAt
+    generateStream->>Firestore: createSnapshot (full file set)
+    generateStream->>Firestore: save assistant message (summary + activities)
+    generateStream-->>WorkspaceStore: SSE: complete\n{generationId, snapshotId, filesCount, summary}
 
-    generateStream-->>WorkspaceStore: SSE: complete { filesCount, summary }
-    WorkspaceStore->>WorkspaceStore: update assistant bubble\nadd summary activity
+    WorkspaceStore->>WorkspaceStore: computeDiffs(filesBeforeGeneration, filesAfter)\n→ diffView.isOpen = true (if modified files)
 
-    Firestore-->>WorkspaceStore: onSnapshot fires\nnew assistant msg with createdAt ≥ startTime\n→ inProgressMsgId = null
+    Firestore-->>WorkspaceStore: onSnapshot fires (new files)
+    Firestore-->>WorkspaceStore: onSnapshot fires (new assistant message)\n→ inProgressMsgId cleared
 
-    WorkspaceStore->>PreviewPanel: isGenerating → false\nwatch triggers refreshPreview()
-    PreviewPanel->>PreviewPanel: rebuild srcdoc\nset iframe.srcdoc
-    PreviewPanel->>PreviewPanel: postMessage auth-token → iframe
-    PreviewPanel-->>User: live preview loads
+    PreviewPanel->>PreviewPanel: watch generationState.isGenerating\n→ false triggers refreshPreview()
+    PreviewPanel->>PreviewPanel: build srcdoc (inline JS/CSS)\ninsert bootstrap script at head\nset iframe.srcdoc
+
+    PreviewPanel->>PreviewPanel: iframe.onload\n→ getIdToken(auth.currentUser)
+    PreviewPanel->>PreviewPanel: postMessage\n{ type: 'auth-token', token }
+
+    PreviewPanel->>PreviewPanel: triggerReady(token)\n→ window.onGenesisReady() fires
+    PreviewPanel->>generateStream: hlFetch('contacts')\nAuthorization: Bearer <Firebase ID token>
+    generateStream-->>PreviewPanel: CRM data (real or dummy)
+    PreviewPanel->>PreviewPanel: render dashboard
 ```
 
 ---
 
 ## 7. SSE Event Protocol
 
-The `generateStream` function streams **Server-Sent Events** to the frontend. All events follow the format:
+All events follow the format:
 
 ```
-event: <type>\ndata: <JSON>\n\n
+event: <type>\n
+data: <JSON>\n
+\n
 ```
 
-### Event Type Reference
+| Event Type   | Data Shape                                                | Description                                                                     |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `status`     | `{ type, message: string }`                               | Human-readable progress update (e.g., "Thinking…", "Generating… 2.5kb written") |
+| `activity`   | `{ type, kind, label, path? }`                            | Structured activity log entry (file_read, file_write, file_delete, summary)     |
+| `file_start` | `{ type, path: string }`                                  | Begin streaming a new file                                                      |
+| `token`      | `{ type, text: string }`                                  | Content chunk for current file (typewriter effect in Monaco)                    |
+| `file_end`   | `{ type, path: string }`                                  | Current file fully streamed                                                     |
+| `complete`   | `{ type, generationId, snapshotId, filesCount, summary }` | Generation successful                                                           |
+| `error`      | `{ type, message: string, savedFilesCount?: number }`     | Generation failed (partial saves indicated)                                     |
 
-```mermaid
-graph LR
-    subgraph SSEEvents["SSE Events (server → client)"]
-        direction TB
-        status["status\n{ type, message }\nProgress text for chat bubble"]
-        activity["activity\n{ type, kind, label, path? }\nRich activity step"]
-        file_start["file_start\n{ type, path }\nEditor tab opens"]
-        token["token\n{ type, text }\nAppend to streaming buffer"]
-        file_end["file_end\n{ type, path }\nStreaming done for file"]
-        complete["complete\n{ type, generationId, snapshotId, filesCount, summary }"]
-        error["error\n{ type, message, savedFilesCount? }"]
-    end
-```
+### Dual-mode token delivery
 
-### Activity Kinds
+**Anthropic path**: The full response is accumulated silently (JSON looks noisy mid-stream). After parsing, each file's content is replayed in 80-character chunks as `token` events — creating a typewriter effect in the editor.
 
-| `kind`        | Icon    | Color  | Meaning                                 |
-| ------------- | ------- | ------ | --------------------------------------- |
-| `status`      | spinner | muted  | Transient progress text (last one wins) |
-| `file_read`   | 📂      | yellow | Existing file read at generation start  |
-| `file_write`  | ✏️      | blue   | File written by this generation         |
-| `file_delete` | 🗑️      | red    | File deleted by this generation         |
-| `summary`     | ✅      | green  | Final completion summary                |
-
-### Frontend SSE Handling (workspace store)
-
-```mermaid
-flowchart TD
-    SSE[SSE event received] --> Switch{event.type}
-
-    Switch -- status --> UpdateLastStatus[Replace last status activity\nin assistant bubble]
-    Switch -- activity --> AddActivity[Append activity to bubble]
-    Switch -- file_start --> OpenStreamBuffer[streamingFileContents path = ''\nactiveStreamFile = path\nactiveFilePath = path]
-    Switch -- token --> AppendToken[streamingFileContents[path] += text\neditorContent computed updates]
-    Switch -- file_end --> ClearActiveFile[activeStreamFile = null]
-    Switch -- complete --> UpdateBubble[Update bubble content + summary\nfilter status activities\nauto-select index.html]
-    Switch -- error --> ShowError[generationState.error = message]
-```
+**HuggingFace path**: `DelimiterStreamParser` processes raw token chunks in real time. `file_start`/`token`/`file_end` events fire as the model outputs `<<<FILE:path>>>` ... `<<<END_FILE>>>` delimiters.
 
 ---
 
 ## 8. HighLevel OAuth & API Flow
 
-### 8.1 OAuth Authorization Flow
-
 ```mermaid
 sequenceDiagram
     participant User
     participant Frontend
-    participant HLOAuthCallback
+    participant hlOAuthCallback
     participant HighLevel
     participant Firestore
 
-    User->>Frontend: click "Connect HighLevel"
-    Frontend->>Frontend: build OAuth URL\n?client_id=...&state=firebaseUID\n&redirect_uri=.../hlOAuthCallback
-    Frontend->>HighLevel: redirect to HL auth page
+    User->>Frontend: Click "Connect HighLevel"
+    Frontend->>Frontend: hlStore.getOAuthUrl(uid)\nBuilds HL authorize URL\n?state=<firebaseUID>
+    Frontend->>HighLevel: browser redirect → HL authorize page
+    User->>HighLevel: user grants permission
+    HighLevel->>hlOAuthCallback: GET /hlOAuthCallback\n?code=xxx&state=<firebaseUID>
 
-    User->>HighLevel: grants permission (Location scope)
-    HighLevel->>HLOAuthCallback: GET /hlOAuthCallback\n?code=AUTH_CODE&state=firebaseUID
+    hlOAuthCallback->>HighLevel: POST /oauth/token\ngrant_type=authorization_code\nclient_id + secret + code
+    HighLevel-->>hlOAuthCallback: { access_token, refresh_token,\nexpiresIn, locationId, companyId }
 
-    HLOAuthCallback->>HighLevel: POST /oauth/token\n{ code, client_id, client_secret,\n  grant_type: authorization_code }
-    HighLevel-->>HLOAuthCallback: { access_token, refresh_token,\n  expires_in, locationId }
+    hlOAuthCallback->>HighLevel: GET /locations/:locationId\n(fetch location name)
+    HighLevel-->>hlOAuthCallback: { location: { name } }
 
-    HLOAuthCallback->>HighLevel: GET /locations/:locationId\n(fetch location name)
-    HighLevel-->>HLOAuthCallback: { location: { name } }
+    hlOAuthCallback->>Firestore: highlevelConnections/:uid\n{ locationId, locationName, accessToken,\nrefreshToken, expiresAt, ... }
 
-    HLOAuthCallback->>Firestore: set highlevelConnections/:uid\n{ accessToken, refreshToken, expiresAt,\n  locationId, locationName }
-
-    HLOAuthCallback-->>Frontend: redirect /dashboard?hl_connected=true
-    Frontend->>Frontend: hlStore.init() detects connection
+    hlOAuthCallback->>Frontend: redirect to /dashboard?hl_connected=true
+    Frontend->>Frontend: hlStore onSnapshot fires\n→ isConnected = true\nlocationName shown in header
 ```
 
-### 8.2 Token Auto-Refresh
+### HL API Endpoints Used
 
-```mermaid
-flowchart TD
-    Request[Any HL API call] --> Interceptor[Axios request interceptor]
-    Interceptor --> Check{expiresAt - now\n> 5 min buffer?}
-    Check -- yes --> UseToken[return stored accessToken]
-    Check -- no --> RefreshCall[POST /oauth/token\ngrant_type: refresh_token]
-    RefreshCall --> SaveNew[Update Firestore:\nnew accessToken\nnew refreshToken\nnew expiresAt]
-    SaveNew --> UseToken
-
-    UseToken --> HLCall[call HL API]
-    HLCall --> Response{HTTP 401?}
-    Response -- no --> Return[return data]
-    Response -- yes --> RetryOnce[retry once after refresh]
-    RetryOnce --> Return
-```
-
-### 8.3 highlevelProxy — Resource Router
-
-```mermaid
-flowchart TD
-    Request["GET /highlevelProxy\n?resource=contacts|conversations|appointments|calendars\n&...params\nAuthorization: Bearer <Firebase ID token>"] --> Auth[verifyAuth → uid]
-    Auth --> CheckConn{highlevelConnections/:uid\nexists?}
-
-    CheckConn -- no --> DummyData["return dummy data\n(isDummy: true flag)\n→ frontend shows demo banner"]
-
-    CheckConn -- yes --> Route{resource param}
-    Route -- contacts --> Contacts["listContacts\n(query, limit, pagination)"]
-    Route -- conversations --> Conversations["listConversations\n(limit)"]
-    Route -- appointments --> Appointments["getAppointments\n(startTime, endTime)"]
-    Route -- calendars --> Calendars[listCalendars]
-
-    Contacts --> HLClient[createHLClient\nAxios + auto token refresh]
-    Conversations --> HLClient
-    Appointments --> HLClient
-    Calendars --> HLClient
-
-    HLClient --> HLAPI[HighLevel API v2\nservices.leadconnectorhq.com]
-    HLAPI --> Return[JSON response]
-```
+| Resource       | Endpoint                           | Notes                                                                                                                                                    |
+| -------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contacts list  | `GET /contacts/`                   | Cursor pagination via `startAfter` (Unix ms) + `startAfterId`. **Note:** `skip` parameter rejected by HL with 422.                                       |
+| Contact create | `POST /contacts/`                  |                                                                                                                                                          |
+| Contact update | `PUT /contacts/:id`                |                                                                                                                                                          |
+| Conversations  | `GET /conversations/search`        | Pagination via `startAfterDate`                                                                                                                          |
+| Messages       | `GET /conversations/:id/messages`  |                                                                                                                                                          |
+| Send message   | `POST /conversations/:id/messages` | type: SMS                                                                                                                                                |
+| Calendars      | `GET /calendars/`                  |                                                                                                                                                          |
+| Appointments   | `GET /calendars/events`            | Requires at least one of: `calendarId`, `userId`, `groupId`. Auto-fetches first calendar if none provided. Time params are Unix ms (converted from ISO). |
+| Availability   | `GET /calendars/:id/free-slots`    |                                                                                                                                                          |
+| Token exchange | `POST /oauth/token`                | `application/x-www-form-urlencoded` (NOT JSON)                                                                                                           |
+| Token refresh  | `POST /oauth/token`                | `grant_type=refresh_token`. New refresh token issued each time — old one invalidated.                                                                    |
+| Location name  | `GET /locations/:id`               | Version header: `2021-07-28`                                                                                                                             |
 
 ---
 
 ## 9. Firestore Data Model
 
-### 9.1 Collection Hierarchy
+```
+/users/{userId}
+  email, displayName, createdAt
 
-```mermaid
-erDiagram
-    USERS {
-        string uid PK
-    }
+/highlevelConnections/{userId}        ← doc ID = Firebase UID
+  userId, locationId, locationName
+  accessToken, refreshToken, expiresAt
+  companyId, createdAt, updatedAt
 
-    HIGHLEVEL_CONNECTIONS {
-        string uid PK
-        string locationId
-        string locationName
-        string companyId
-        string accessToken
-        string refreshToken
-        timestamp expiresAt
-        timestamp createdAt
-        timestamp updatedAt
-    }
+/projects/{projectId}
+  userId, name, description
+  highLevelLocationId
+  createdAt, updatedAt, deletedAt     ← null unless soft-deleted
 
-    PROJECTS {
-        string id PK
-        string userId FK
-        string name
-        string description
-        string highLevelLocationId
-        timestamp createdAt
-        timestamp updatedAt
-        timestamp deletedAt
-    }
+  /files/{fileId}                     ← fileId = path.replace(/\//g, '__')
+    path, content, updatedAt
 
-    FILES {
-        string id PK
-        string path
-        string content
-        timestamp updatedAt
-    }
+  /snapshots/{snapshotId}
+    generationId
+    files: [{ path, content }]        ← full file set at generation time
+    createdAt
 
-    MESSAGES {
-        string id PK
-        string projectId FK
-        string role
-        string content
-        array activities
-        timestamp createdAt
-    }
+  /messages/{messageId}
+    projectId, role (user|assistant)
+    content                           ← summary text for assistant messages
+    activities?: [{ kind, label, path? }]
+    createdAt
 
-    SNAPSHOTS {
-        string id PK
-        string projectId FK
-        string generationId
-        array files
-        timestamp createdAt
-    }
-
-    USERS ||--o| HIGHLEVEL_CONNECTIONS : "one connection per user"
-    USERS ||--o{ PROJECTS : owns
-    PROJECTS ||--o{ FILES : contains
-    PROJECTS ||--o{ MESSAGES : has
-    PROJECTS ||--o{ SNAPSHOTS : has
+/_rateLimits/{uid__endpoint}          ← admin SDK only, client denied
+  uid, endpoint, count, windowStart
+  updatedAt
 ```
 
-### 9.2 Document Shapes
+### Firestore Indexes
 
-**`highlevelConnections/:uid`**
-
-```
-{
-  userId: string,
-  locationId: string,           // HL sub-account location
-  locationName: string,         // human-readable, fetched from /locations
-  companyId: string,
-  accessToken: string,          // HL OAuth access token (short-lived)
-  refreshToken: string,         // HL OAuth refresh token (1 year, rotates on use)
-  expiresAt: Timestamp,
-  createdAt: Timestamp,
-  updatedAt: Timestamp
-}
-```
-
-**`projects/:projectId`**
-
-```
-{
-  userId: string,               // Firebase UID — ownership key
-  name: string,
-  description: string,
-  highLevelLocationId: string,
-  createdAt: Timestamp,
-  updatedAt: Timestamp,
-  deletedAt: Timestamp | null   // soft delete
-}
-```
-
-**`projects/:projectId/files/:fileId`**
-
-```
-fileId = path.replace(/\//g, '__')   // e.g. "src/app.js" → "src__app.js"
-
-{
-  path: string,                // e.g. "index.html", "app.js"
-  content: string,             // full file content
-  updatedAt: Timestamp
-}
-```
-
-**`projects/:projectId/messages/:msgId`**
-
-```
-{
-  projectId: string,
-  role: 'user' | 'assistant',
-  content: string,
-  activities: [                // only on assistant messages
-    { kind: 'file_read' | 'file_write' | 'file_delete' | 'summary' | 'status',
-      label: string,
-      path?: string }
-  ],
-  createdAt: Timestamp
-}
-```
-
-**`projects/:projectId/snapshots/:snapshotId`**
-
-```
-{
-  generationId: string,        // "gen_<timestamp>"
-  files: [
-    { path: string, content: string }
-  ],
-  createdAt: Timestamp
-}
-```
-
-### 9.3 Firestore Security Rules Summary
-
-```mermaid
-flowchart LR
-    Rule1["/users/:uid\nread+write if auth.uid == uid"]
-    Rule2["/highlevelConnections/:uid\nread+write if auth.uid == uid"]
-    Rule3["/projects/:projectId\nread if authenticated + owns doc\ncreate if userId == auth.uid\nupdate/delete if owns doc"]
-    Rule4["/projects/:pid/files/:fid\nread+write if authenticated\n+ parent project exists\n+ parent.userId == auth.uid"]
-    Rule5["/projects/:pid/snapshots/:sid\n(same as files)"]
-    Rule6["/projects/:pid/messages/:mid\n(same as files)"]
-```
-
-All Cloud Functions bypass Firestore rules because they use the **Admin SDK** (`firebase-admin`) which has elevated privileges. Rules protect direct client-SDK access only.
+| Collection  | Fields                            | Order     |
+| ----------- | --------------------------------- | --------- |
+| `projects`  | `userId ASC`, `createdAt DESC`    | composite |
+| `snapshots` | `projectId ASC`, `createdAt DESC` | composite |
+| `messages`  | `projectId ASC`, `createdAt ASC`  | composite |
 
 ---
 
 ## 10. Preview Iframe Architecture
 
-The preview panel assembles a **fully self-contained HTML document** from the project's files and sets it as `iframe.srcdoc`. No separate server needed.
-
-### 10.1 srcdoc Assembly (PreviewPanel.vue)
-
 ```mermaid
 flowchart TD
-    Start[computed: srcdoc] --> FindIndex{index.html exists?}
-    FindIndex -- no --> NullSrc[return null\nshow empty state]
-    FindIndex -- yes --> StartHTML[html = indexFile.content]
+    subgraph Files["Project files (Firestore)"]
+        IndexHTML[index.html]
+        AppJS[app.js]
+        StyleCSS[style.css]
+    end
 
-    StartHTML --> InlineJS[for each .js file:\nreplace script src tag\nOR append before /body]
-    InlineJS --> InlineCSS[for each .css file:\nreplace link href tag\nwith inline style block]
-    InlineCSS --> InjectBootstrap[prepend to head:\nwindow.__GENESIS_PROXY__\nwindow.__proxyBase URLs]
+    subgraph PreviewPanel["PreviewPanel.vue — srcdoc computation"]
+        A[Start with index.html content]
+        B["Replace <script src='app.js'> with inline <script>"]
+        C["Replace <link href='style.css'> with inline <style>"]
+        D["Inject bootstrap script at <head>\n(before generated app's own bootstrap)"]
+        E[Set iframe.srcdoc]
+    end
 
-    InjectBootstrap --> SetSrcDoc[iframe.srcdoc = assembled HTML]
-    SetSrcDoc --> IframeLoad[iframe loads, runs\napp bootstrap script]
-    IframeLoad --> WaitToken[app waits for\nwindow.onGenesisReady()]
-    WaitToken --> PostMessage[parent postMessage\n{ type: auth-token, token: FirebaseIDToken }]
-    PostMessage --> AppStart[app calls hlFetch()\n→ GET /highlevelProxy?resource=...]
+    subgraph IframeRuntime["iframe runtime (sandboxed origin)"]
+        Boot[Bootstrap script runs\nRegisters message + genesis-ready listeners\nDefines window.hlFetch globally]
+        App[Generated app JS runs\nSets window.onGenesisReady = function() {...}]
+        Token[parent postMessage\n{ type: 'auth-token', token }]
+        Ready[triggerReady(token)\n→ window.onGenesisReady() called]
+        Fetch["hlFetch('contacts', { limit: 20 })\n→ fetch /highlevelProxy?resource=contacts\nAuthorization: Bearer <token>"]
+    end
+
+    IndexHTML --> A
+    AppJS --> B
+    StyleCSS --> C
+    A --> B --> C --> D --> E
+
+    E --> Boot
+    Boot --> App
+    Token --> Ready
+    App --> Ready
+    Ready --> Fetch
 ```
 
-### 10.2 Token Injection via postMessage
+**Bootstrap injection**: The PreviewPanel always injects its own bootstrap at the very top of `<head>`, even if the generated app already includes one. This guarantees `hlFetch` and the `auth-token` message listener are always defined, even when the LLM forgets to include the bootstrap in its output.
 
-```mermaid
-sequenceDiagram
-    participant PreviewPanel
-    participant Iframe as "iframe (generated app)"
-    participant HLProxy as "highlevelProxy CF"
+**Sandbox attributes**: `allow-scripts allow-same-origin allow-forms allow-popups`
 
-    PreviewPanel->>PreviewPanel: watch generationState.isGenerating\n→ false triggers refreshPreview()
-    PreviewPanel->>PreviewPanel: build srcdoc, set iframe.srcdoc
+**Auto-refresh triggers**:
 
-    Iframe->>Iframe: bootstrap script runs in <head>\nregisters message + genesis-ready listeners
-    Iframe->>Iframe: app runs, calls onGenesisReady when ready
-
-    PreviewPanel->>Iframe: iframe.onload fires\n→ getIdToken(auth.currentUser)
-    PreviewPanel->>Iframe: postMessage\n{ type: 'auth-token', token: <Firebase ID token> }
-
-    Iframe->>Iframe: triggerReady(token)\n→ __token = token\n→ window.onGenesisReady() fires
-
-    Iframe->>HLProxy: fetch /highlevelProxy?resource=contacts\nAuthorization: Bearer <Firebase ID token>
-    HLProxy->>HLProxy: verifyAuth → uid\ncheck HL connection
-    HLProxy-->>Iframe: CRM data (real or dummy)
-    Iframe->>Iframe: render dashboard
-```
+- When `generationState.isGenerating` transitions from `true` → `false`
+- When any file's `path + updatedAt` changes (snapshot restore, manual save)
 
 ---
 
@@ -793,38 +711,38 @@ The parser (`generation/parser.ts`) uses a **6-strategy waterfall** — each str
 flowchart TD
     Input[LLM raw response string] --> S1
 
-    S1{Strategy 1\nDelimiter format\nSkipped if jsonOnly=true}
+    S1{"Strategy 1\nDelimiter format\nSkipped if jsonOnly=true"}
     S1 -- "<<<FILE:path>>>\n...content...\n<<<END_FILE>>>" --> Ops[FileOperation array]
     S1 -- not found --> S2
 
-    S2{Strategy 2\nStrip markdown fences\ndirect JSON.parse}
+    S2{"Strategy 2\nStrip markdown fences\ndirect JSON.parse"}
     S2 -- valid JSON array --> Ops
     S2 -- fails --> S3
 
-    S3{Strategy 3\nBracket extraction\noutermost [ ... ]\nJSON.parse}
+    S3{"Strategy 3\nBracket extraction\noutermost [ ... ]\nJSON.parse"}
     S3 -- valid --> Ops
     S3 -- fails --> S4
 
-    S4{Strategy 4\nJSON string repair\nescape bare newlines\nthen parse}
+    S4{"Strategy 4\nJSON string repair\nescape bare newlines\nthen parse"}
     S4 -- valid --> Ops
     S4 -- fails --> S5
 
-    S5{Strategy 5\nRegex object extraction\npull path + operation\n+ content manually}
+    S5{"Strategy 5\nRegex object extraction\npull path + operation\n+ content manually"}
     S5 -- found --> Ops
     S5 -- nothing --> S6
 
-    S6{Strategy 6\nMarkdown block extraction\n``` html/js/css blocks\nmapped to filenames}
+    S6{"Strategy 6\nMarkdown block extraction\n``` html/js/css blocks\nmapped to filenames"}
     S6 -- blocks found --> Ops
     S6 -- nothing --> Error[return operations=[]\nwarn in logs]
 
-    Ops --> Validate[For each operation:\npath.length <= 200\nmust match /\.[a-z]{1,5}$/\nno < or newlines in path]
-    Validate --> Clean[sanitizePath\nstrip ../ prefixes\nstrip leading /]
+    Ops --> Validate["For each operation:\npath.length ≤ 200\nmust match /\.[a-z]{1,5}$/\nno < or newlines in path"]
+    Validate --> Clean["sanitizePath\nstrip ../ prefixes\nstrip leading /"]
     Clean --> Return[FileOperation[]]
 ````
 
 ### LLM Output Formats
 
-**Anthropic path (JSON)**:
+**Anthropic path (JSON)** — `jsonOnly=true` skips Strategy 1:
 
 ```json
 [
@@ -834,7 +752,7 @@ flowchart TD
 ]
 ```
 
-**HuggingFace path (Delimiters)**:
+**HuggingFace path (Delimiters)** — real-time streaming via `DelimiterStreamParser`:
 
 ```
 <<<FILE:index.html>>>
@@ -843,7 +761,9 @@ flowchart TD
 <<<DELETE:old.js>>>
 ```
 
-**Anthropic Prefill Trick**: The system appends an assistant turn starting with `[` before sending to Anthropic. This forces the model to continue the JSON array — it cannot output plain text or delimiters because it's already "started" with `[`.
+**Anthropic Prefill Trick**: An assistant turn starting with `[` is appended before the API call. This forces Claude to continue outputting a JSON array — it cannot switch to plain text or delimiters because it has already "started" with `[`. Delimiter-format assistant messages in conversation history are also stripped to prevent format bleed-over.
+
+**Path validation**: Paths are rejected if `length > 200`, contain `<` (HTML tags), contain `\n` (newlines), or lack a file extension. This guards against the case where the LLM puts entire file content in the `path` field when it mixes output formats.
 
 ---
 
@@ -853,42 +773,125 @@ Every successful generation creates a **full snapshot** — a complete copy of a
 
 ```mermaid
 flowchart LR
-    Gen[Generation completes] --> MergeFiles[Merge:\nexistingFiles map\n+ newlySavedFiles\n- deletedFiles]
+    Gen[Generation completes] --> MergeFiles["Merge:\nexistingFiles map\n+ newlySavedFiles\n− deletedFiles"]
     MergeFiles --> SnapDoc["snapshots/:snapshotId\n{ generationId, files[], createdAt }"]
 
     Restore[User clicks Restore] --> ListSnaps[GET /listSnapshots\nshows last 20]
-    ListSnaps --> PickSnap[User picks a snapshot]
+    ListSnaps --> PickSnap[User picks a snapshot\nin SnapshotDrawer sheet]
     PickSnap --> RestoreCall[POST /restoreSnapshot\n{ projectId, snapshotId }]
     RestoreCall --> DeleteAll[batch.delete\nall current files]
     DeleteAll --> RewriteAll[batch.set\nall snapshot files]
-    RewriteAll --> Firestore[Firestore\nonSnapshot fires\nUI updates instantly]
+    RewriteAll --> Firestore[Firestore\nonSnapshot fires\nUI + Preview update instantly]
 ```
 
-**Snapshot storage**: Full file contents (not diffs). Trade-off: simple and reliable at this scale; would need delta compression for large projects.
+**Snapshot storage**: Full file contents (not diffs). Trade-off: simple and reliable restore; storage grows linearly with generations. Acceptable at this scale.
+
+**Retention**: Last 20 snapshots shown per project (no automatic pruning currently).
 
 ---
 
-## 14. State Management (Pinia Stores)
+## 14. Diff View System
 
-### 14.1 `auth` store
+After each generation that modifies existing files, Genesis automatically computes and displays a side-by-side diff.
+
+### 14.1 Diff Computation (workspace store)
+
+```
+filesBeforeGeneration  ←  captured at generate() start
+filesAfter             ←  streamingFileContents + unchanged Firestore files
+                           (uses streaming content since Firestore may not be updated yet)
+
+computeDiffs(before, after, generationId):
+  → For each path in union(before.keys, after.keys):
+      if only in after  → status: 'added'
+      if only in before → status: 'deleted'
+      if content differs → status: 'modified'
+      (unchanged paths excluded — not useful to show)
+  → Sort: added → modified → deleted → path alphabetical
+  → diffView.isOpen = true (if diffs.length > 0)
+```
+
+**First generation**: Diff is skipped — `filesBeforeGeneration.length === 0`, so there is nothing to compare.
+
+### 14.2 DiffView Component
+
+`DiffView.vue` renders as a fixed full-screen overlay with:
+
+- **File list sidebar** — lists all changed files with status icon (green + for added, yellow pencil for modified, red × for deleted) and badge counts in the header
+- **Side-by-side diff panel** — uses an LCS (Longest Common Subsequence) DP algorithm to produce line-level diff segments tagged `same`, `added`, or `removed`. Removed lines highlighted red, added lines highlighted green.
+- **Line numbers** — both sides display 1-based line numbers
+
+```
+computeLineDiff(before, after):
+  Uses O(m×n) DP table (bLines × aLines) to find LCS
+  Walks DP table to produce left[] (before) + right[] (after) LineSeg arrays
+  LineSeg: { type: 'same' | 'added' | 'removed', lineNo, text }
+```
+
+---
+
+## 15. Rate Limiting
+
+Genesis implements **Firestore-backed sliding-window rate limiting** (`functions/src/rateLimit.ts`) on the two most expensive endpoints.
+
+### 15.1 Configuration
+
+| Endpoint         | Window | Max Requests |
+| ---------------- | ------ | ------------ |
+| `generateStream` | 60 sec | 10 per uid   |
+| `highlevelProxy` | 60 sec | 60 per uid   |
+
+### 15.2 Algorithm
+
+```mermaid
+flowchart TD
+    A[checkRateLimit\nuid, endpoint, config] --> B[db.runTransaction]
+    B --> C{doc exists?}
+    C -- no --> D[Create doc\ncount=1, windowStart=now\n→ allowed]
+    C -- yes --> E{now - windowStart > windowMs?}
+    E -- yes --> F[Reset window\ncount=1\n→ allowed]
+    E -- no --> G{count >= maxRequests?}
+    G -- yes --> H[→ denied\nresetMs = windowStart + windowMs]
+    G -- no --> I[Increment count\n→ allowed\nremaining = max - count - 1]
+```
+
+**Fail-open**: If the Firestore transaction throws (network issue, contention), the function fails open — the request is allowed and `remaining=0` is returned. This avoids blocking legitimate traffic on infrastructure hiccups.
+
+**Storage**: `/_rateLimits/{uid__{endpoint}}` collection — locked to admin SDK only via Firestore security rules (`allow read, write: if false`).
+
+**Rate limit response** (SSE error event for `generateStream`):
+
+```json
+{ "type": "error", "message": "Rate limit exceeded. Try again in 42s (max 10 generations/min)." }
+```
+
+---
+
+## 17. State Management (Pinia Stores)
+
+### 17.1 `auth` store
 
 ```
 state: firebaseUser, loading, error
-getters: user (mapped), isAuthenticated
-actions: init(), signup(), login(), logout(), clearError()
+getters: user (mapped to { uid, email, displayName }), isAuthenticated
+actions: init() → onAuthStateChanged listener
+         signup(email, password, name) → createUserWithEmailAndPassword
+         login(email, password) → signInWithEmailAndPassword
+         logout() → signOut
+         clearError()
 ```
 
-### 14.2 `highlevel` store
+### 17.2 `highlevel` store
 
 ```
 state: connection (HL connection doc), loading
 getters: isConnected, locationName, locationId
 actions: init() → onSnapshot highlevelConnections/:uid
-         getOAuthUrl(uid) → builds HL OAuth URL with state=uid
+         getOAuthUrl(uid) → builds HL OAuth authorize URL with state=uid
          destroy() → unsubscribe
 ```
 
-### 14.3 `projects` store
+### 17.3 `projects` store
 
 ```
 state: projects[], loading, error
@@ -898,7 +901,7 @@ actions: fetchProjects() → GET /listProjects
          deleteProject(id) → DELETE /deleteProject/:id
 ```
 
-### 14.4 `workspace` store (most complex)
+### 17.4 `workspace` store (most complex)
 
 ```
 state:
@@ -906,14 +909,17 @@ state:
   activeFilePath, generationState
   streamingFileContents{}, activeStreamFile
   inProgressMsgId, inProgressStartTime
+  filesBeforeGeneration[]
+  diffView: { isOpen, generationId, diffs[], selectedPath }
+  abortController (private)
 
 computed:
-  activeFile → files.find(activeFilePath)
-  fileTree   → { dir: [path, ...] } grouped
-  editorContent → streamingFileContents[activeStream] ?? activeFile.content
+  activeFile      → files.find(activeFilePath)
+  fileTree        → { dir: [path, ...] } grouped by directory
+  editorContent   → streamingFileContents[activeStream] ?? activeFile.content
 
 real-time listeners:
-  filesUnsub   → onSnapshot projects/:pid/files    (ordered by path)
+  filesUnsub    → onSnapshot projects/:pid/files    (ordered by path)
   messagesUnsub → onSnapshot projects/:pid/messages (ordered by createdAt asc)
     └── merges remote messages with local in-progress bubble
     └── drops bubble when new remote assistant msg createdAt >= inProgressStartTime
@@ -921,14 +927,16 @@ real-time listeners:
 actions:
   init(pid), destroy()
   selectFile(path), saveFile(path, content)
-  generate(prompt) → full SSE flow
+  generate(prompt) → full SSE flow with AbortController
   abortGeneration() → abortController.abort()
   restoreSnapshot(id), fetchSnapshots()
+  computeDiffs(before, after, generationId)
+  closeDiffView(), selectDiffFile(path)
 ```
 
 ---
 
-## 15. Security Model
+## 18. Security Model
 
 ```mermaid
 graph TB
@@ -939,18 +947,20 @@ graph TB
 
     subgraph "Cloud Function boundary"
         VerifyAuth[verifyAuth\nvalidates Firebase ID token\nextracts uid]
+        RateLimit[checkRateLimit\nFirestore sliding window\nper uid per endpoint]
         HLTokenStore[HL tokens stored\nin Firestore server-side\nAdmin SDK only]
         ProxyLayer[highlevelProxy\ncalls HL on behalf of uid]
     end
 
     subgraph "Iframe sandbox"
-        SrcDoc[srcdoc — no src= URL\nno cookies/session\nisolated origin]
+        SrcDoc[srcdoc — no src= URL\nno cookies/session\nsandboxed origin]
         PostMsg[Token via postMessage\nnot embedded in HTML]
         HLFetch[hlFetch helper\ncalls proxy not HL directly]
     end
 
     FBToken --> VerifyAuth
-    VerifyAuth --> ProxyLayer
+    VerifyAuth --> RateLimit
+    RateLimit --> ProxyLayer
     ProxyLayer --> HLTokenStore
     HLFetch --> ProxyLayer
     PostMsg --> HLFetch
@@ -966,26 +976,28 @@ graph TB
 | Ownership enforcement             | Every CF query filters by `userId == auth.uid`                           |
 | Path injection prevention         | File paths validated: max 200 chars, must have extension, no `<` or `\n` |
 | Prompt injection prevention       | LLM output is a structured JSON array — validated before Firestore write |
+| Rate limiting                     | Firestore sliding window per `(uid, endpoint)`, admin SDK only           |
 | Soft deletes                      | `deletedAt` timestamp — no cascade issues, recoverable                   |
+| Rate limit collection lockdown    | `/_rateLimits` denied to all client reads/writes via Firestore rules     |
 
 ---
 
-## 16. Deployment Architecture
+## 19. Deployment Architecture
 
 ```mermaid
 graph LR
     subgraph GCP["Google Cloud Platform"]
         subgraph Firebase["Firebase Project"]
-            Hosting["Firebase Hosting\nfrontend/dist/\nSPA rewrite: /* → index.html"]
-            CF["Cloud Functions\nus-central1 region\n512MB, 300s timeout (generateStream)\ndefault for others"]
+            Hosting["Firebase Hosting\nfrontend/dist/\nSPA rewrite: /** → index.html"]
+            CF["Cloud Functions\nus-central1 region\n512MB, 300s timeout (generateStream)\ndefault for all others"]
             FS["Cloud Firestore\nus-central1\nNative mode"]
             FA["Firebase Auth\nEmail/Password provider"]
         end
     end
 
     subgraph External["External Services"]
-        Anthropic["Anthropic API\napi.anthropic.com"]
-        HF["HuggingFace\napi-inference.huggingface.co\n(optional)"]
+        Anthropic["Anthropic API\napi.anthropic.com\nclaude-sonnet-4-6"]
+        HF["HuggingFace\napi-inference.huggingface.co\nQwen2.5-Coder-7B (optional)"]
         HL["HighLevel\nservices.leadconnectorhq.com"]
     end
 
@@ -1001,14 +1013,14 @@ graph LR
 ### Production Secrets (Firebase Secret Manager)
 
 ```
-ANTHROPIC_API_KEY         → used in generateStream
-HIGHLEVEL_CLIENT_ID       → used in hlOAuthCallback + oauth.ts
-HIGHLEVEL_CLIENT_SECRET   → used in hlOAuthCallback + oauth.ts
-HIGHLEVEL_REDIRECT_URI    → OAuth callback URL
-FRONTEND_URL              → redirect after OAuth
-HF_TOKEN                  → HuggingFace (optional)
-USE_HUGGINGFACE           → 'true' to switch AI provider
-FUNCTIONS_BASE_URL        → self-reference for proxy URL injection
+ANTHROPIC_API_KEY          → used in generateStream
+HIGHLEVEL_CLIENT_ID        → used in hlOAuthCallback + oauth.ts
+HIGHLEVEL_CLIENT_SECRET    → used in hlOAuthCallback + oauth.ts
+HIGHLEVEL_REDIRECT_URI     → OAuth callback URL
+FRONTEND_URL               → redirect destination after OAuth
+HF_TOKEN                   → HuggingFace token (if USE_HUGGINGFACE=true)
+USE_HUGGINGFACE            → 'true' to switch AI provider to Qwen
+FUNCTIONS_BASE_URL         → self-reference for proxy URL injection into system prompt
 ```
 
 ### Build & Deploy Commands
@@ -1024,32 +1036,36 @@ firebase deploy --only functions
 cd frontend && npm run build && cd .. && firebase deploy --only hosting
 
 # Local dev
-firebase emulators:start        # Terminal 1
-cd frontend && npm run dev       # Terminal 2
+firebase emulators:start        # Terminal 1 (auth :9099, functions :5001, firestore :8080, ui :4000)
+cd frontend && npm run dev       # Terminal 2 (vite :5173)
 ```
 
 ---
 
-## 17. Key Design Decisions
+## 20. Key Design Decisions
 
 | Decision                     | Choice                                            | Rationale                                                                                                                                              |
 | ---------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Streaming protocol**       | Server-Sent Events (SSE)                          | One-directional stream from server. No socket infrastructure needed. Firebase functions support long-running HTTP responses.                           |
 | **LLM output format**        | JSON array (Anthropic) / Delimiters (HuggingFace) | JSON is reliable for Claude. Prefill trick (`[`) locks format. Delimiter streaming enables real-time file_start/token/file_end events for HuggingFace. |
-| **Preview sandboxing**       | `iframe.srcdoc`                                   | Instant preview of vanilla HTML+JS. No build step. No WebContainers overhead. Files inlined at runtime.                                                |
-| **Token delivery to iframe** | `postMessage`                                     | Token never embedded in HTML source. Clean security boundary between parent and iframe.                                                                |
+| **Preview sandboxing**       | `iframe.srcdoc`                                   | Instant preview of vanilla HTML+JS. No build step. No WebContainers overhead. JS/CSS files inlined at runtime by PreviewPanel.                         |
+| **Token delivery to iframe** | `postMessage` + backup `genesis-ready` event      | Token never embedded in HTML source. Clean security boundary between parent and iframe. Bootstrap injected by PreviewPanel as safety net.              |
 | **HL API access**            | Server-side proxy function                        | HL tokens never touch the browser. Correct marketplace architecture. Auto token refresh transparent to generated apps.                                 |
 | **Firestore real-time**      | `onSnapshot` for files + messages                 | Instant UI update when generation completes. No polling.                                                                                               |
 | **File ID scheme**           | `path.replace(/\//g, '__')`                       | Deterministic IDs for upsert-friendly writes. Firestore doc IDs cannot contain `/`.                                                                    |
 | **Conversation history**     | Last 10 messages, filtered                        | Removes summary messages (UI labels) and delimiter artifacts before sending to LLM. Prevents LLM format confusion.                                     |
 | **Snapshot granularity**     | Full file set per generation                      | Simple. Reliable restore. Acceptable storage at this scale.                                                                                            |
 | **Soft delete for projects** | `deletedAt` field                                 | Recoverable. No Firestore cascade concerns.                                                                                                            |
-| **Dummy data fallback**      | Realistic fake data when HL not connected         | Apps are fully previewable without a HighLevel account. `isDummy: true` flag triggers in-app banner.                                                   |
+| **Rate limiting**            | Firestore sliding-window, fail-open               | Per-user API cost control. Fail-open on infrastructure errors to avoid false blocks. Admin-SDK-only collection prevents client tampering.              |
+| **Generation cancellation**  | `AbortController` on the SSE fetch                | User can abort mid-stream. Partial files already saved to Firestore are preserved.                                                                     |
+| **Diff view**                | LCS-based line diff, side-by-side overlay         | Shows exactly what changed per generation. Uses `filesBeforeGeneration` snapshot + streaming content for immediate diff without waiting for Firestore. |
+| **HL pagination (contacts)** | Cursor-based `startAfter` + `startAfterId`        | HL deprecated `skip` — using it returns 422. Cursor pagination is the only supported approach.                                                         |
+| **Appointments fetch**       | Auto-fetch first calendar if none provided        | HL `/calendars/events` requires a `calendarId`. The proxy gracefully handles the case by auto-discovering the first available calendar.                |
 | **inProgressStartTime fix**  | Epoch ms recorded at generation start             | Firestore listener distinguishes new vs old assistant messages. Prevents second-prompt bubble disappearing bug.                                        |
 
 ---
 
-## 18. Environment Variables Reference
+## 21. Environment Variables Reference
 
 ### Frontend (`frontend/.env`)
 
@@ -1069,27 +1085,25 @@ cd frontend && npm run dev       # Terminal 2
 | `ANTHROPIC_API_KEY`       | Anthropic Claude API key                                        |
 | `HIGHLEVEL_CLIENT_ID`     | HL Marketplace app client ID                                    |
 | `HIGHLEVEL_CLIENT_SECRET` | HL Marketplace app client secret                                |
-| `HIGHLEVEL_REDIRECT_URI`  | OAuth callback URL                                              |
-| `FRONTEND_URL`            | Frontend URL for OAuth redirect                                 |
+| `HIGHLEVEL_REDIRECT_URI`  | OAuth callback URL (must match HL app settings)                 |
+| `FRONTEND_URL`            | Frontend URL for post-OAuth redirect                            |
 | `USE_HUGGINGFACE`         | `'true'` to use Qwen instead of Claude                          |
-| `HF_TOKEN`                | HuggingFace API token (if USE_HUGGINGFACE=true)                 |
-| `FUNCTIONS_BASE_URL`      | Self-reference: base URL for proxy injection into system prompt |
+| `HF_TOKEN`                | HuggingFace API token (required if USE_HUGGINGFACE=true)        |
+| `FUNCTIONS_BASE_URL`      | Self-reference base URL — injected into system prompt for proxy |
 
 ---
 
-## 19. API Reference
+## 22. API Reference
 
 ### `POST /generateStream`
 
 **Auth**: Firebase ID token (Bearer)  
 **Content-Type**: `application/json`  
-**Response**: `text/event-stream`
+**Response**: `text/event-stream`  
+**Rate limit**: 10 req/min per user
 
 ```json
-{
-  "projectId": "string",
-  "prompt": "string"
-}
+{ "projectId": "string", "prompt": "string" }
 ```
 
 Streams SSE events. See [Section 7](#7-sse-event-protocol) for event types.
@@ -1098,7 +1112,8 @@ Streams SSE events. See [Section 7](#7-sse-event-protocol) for event types.
 
 ### `GET /highlevelProxy`
 
-**Auth**: Firebase ID token (Bearer)
+**Auth**: Firebase ID token (Bearer)  
+**Rate limit**: 60 req/min per user
 
 | Query Param | Values                                                   |
 | ----------- | -------------------------------------------------------- |
@@ -1108,19 +1123,19 @@ Streams SSE events. See [Section 7](#7-sse-event-protocol) for event types.
 | `startTime` | ISO string (appointments)                                |
 | `endTime`   | ISO string (appointments)                                |
 
-Returns real HL data if connected, or realistic dummy data with `isDummy: true` flag.
+Returns real HL data if connected.
 
 ---
 
 ### `GET /listProjects` / `POST /createProject` / `PATCH /updateProject/:id` / `DELETE /deleteProject/:id`
 
-Standard CRUD. All require Firebase Bearer token. Delete is soft (sets `deletedAt`).
+Standard CRUD. All require Firebase Bearer token. Delete is soft (sets `deletedAt`). Create requires `name` and `highLevelLocationId`.
 
 ---
 
 ### `GET /listFiles?projectId=` / `GET /getFile?projectId=&path=` / `POST /saveFile`
 
-File CRUD for a project. IDs are path-based (`path.replace(/\//g, '__')`).
+File CRUD for a project. File IDs are path-based (`path.replace(/\//g, '__')`). `saveFile` uses `set(..., { merge: true })` for upserts.
 
 ---
 
@@ -1131,14 +1146,14 @@ File CRUD for a project. IDs are path-based (`path.replace(/\//g, '__')`).
 { "projectId": "string", "snapshotId": "string" }
 ```
 
-Restore bulk-replaces all files in the project.
+`listSnapshots` returns last 20, ordered by `createdAt desc`. Restore bulk-replaces all current files in a single Firestore batch.
 
 ---
 
 ### `GET /hlOAuthCallback?code=&state=<firebaseUID>`
 
-OAuth redirect handler. Exchanges code → tokens, stores in Firestore, redirects to frontend.
+OAuth redirect handler. Exchanges code → tokens, fetches location name, stores in `highlevelConnections/:uid`, redirects to `FRONTEND_URL/dashboard?hl_connected=true`.
 
 ---
 
-_Document generated from full codebase analysis of Genesis v1 — frontend (Vue 3/Pinia/TypeScript) + Firebase Functions + Firestore._
+_Document generated from full codebase analysis of Genesis — frontend (Vue 3/Pinia/TypeScript/ShadCN) + Firebase Functions (Node 20/TypeScript) + Firestore._

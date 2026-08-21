@@ -4,8 +4,8 @@
 
 **Live URLs**
 
-- Frontend: `https://YOUR_PROJECT_ID.web.app`
-- Functions base: `https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net`
+- Frontend: `https://app-builder-77fdb.web.app`
+- Functions base: `https://us-central1-app-builder-77fdb.cloudfunctions.net/`
 
 **Loom Demo:** [Add link after recording]
 
@@ -16,7 +16,7 @@
 1. Go to [developers.gohighlevel.com](https://developers.gohighlevel.com) → create a Marketplace App
 2. Set OAuth Redirect URI to:
    ```
-   https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/hlOAuthCallback
+   https://us-central1-app-builder-77fdb.cloudfunctions.net/hlOAuthCallback
    ```
    For local dev:
    ```
@@ -38,7 +38,7 @@
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/genesis.git
+git clone https://github.com/kd399/genesis.git
 cd genesis
 
 # Frontend
@@ -81,11 +81,16 @@ In Firebase console:
 ### 4. Run locally
 
 ```bash
+
+# Functions
+cd functions && npm run build && cd ..
+
 # Terminal 1 — Firebase emulators
 firebase emulators:start
 
+# Frontend
 # Terminal 2 — Vue dev server
-cd frontend && npm run dev
+cd frontend && npm run build && npm run dev
 ```
 
 Open: `http://localhost:5173`
@@ -99,37 +104,38 @@ Emulator UI: `http://localhost:4000`
 
 2. **SSE over WebSockets** — Server-Sent Events are sufficient for one-directional LLM token streaming and require no socket infrastructure. Simpler, cheaper, Firebase-compatible.
 
-3. **Structured LLM output** — Claude is instructed to return a JSON array of `{operation, path, content}` objects. The backend validates and sanitizes before persisting. This prevents prompt injection from corrupting the file system.
+3. **Structured LLM output (JSON + prefill trick)** — Claude is instructed to return a JSON array of `{operation, path, content}` objects. An assistant prefill turn starting with `[` forces the model to output valid JSON — it cannot switch to plain text or delimiter format mid-stream. The backend validates and sanitizes before persisting.
 
-4. **srcdoc preview over WebContainers** — Generated apps are vanilla HTML+JS (no build step). srcdoc preview works instantly with no build infrastructure. WebContainers would add complexity without benefit for this use case.
+4. **srcdoc preview over WebContainers** — Generated apps are vanilla HTML+JS (no build step). `srcdoc` preview works instantly with no build infrastructure. External JS/CSS files are inlined at runtime before assignment.
 
 5. **Token via postMessage** — The preview iframe receives the Firebase ID token through `postMessage`. The token is never embedded in HTML. The iframe calls our HL proxy (not HL directly), keeping secrets on the server.
 
 6. **Firestore real-time listeners** — Files and messages use `onSnapshot` for instant UI updates after generation. No polling needed.
 
-7. **File ID = path with slashes replaced** — Firestore document IDs can't contain `/`. Using `path.replace(/\//g, '__')` gives deterministic IDs for upserts and lookups.
+7. **File ID = path with slashes replaced** — Firestore document IDs can't contain `/`. Using `path.replace(/\//g, '__')` gives deterministic IDs for upsert-friendly writes and safe lookups.
 
-8. **Snapshot = full file set copy** — Each generation snapshots all current files (not a diff). Simple, reliable restore. Acceptable for this scale.
+8. **Snapshot = full file set copy per generation** — Each generation snapshots the complete merged file set (existing + newly written − deleted). Simple, reliable restore. Acceptable storage cost at this scale.
 
-9. **Token refresh with 5-min buffer** — Access tokens are refreshed 5 minutes before expiry. One retry on 401 ensures failed requests recover transparently.
-
-10. **Soft deletes for projects** — `deletedAt` timestamp instead of document deletion. Allows recovery and avoids Firestore cascade concerns.
+9. **Firestore-backed rate limiting** — A sliding-window counter stored per `(uid, endpoint)` in `_rateLimits` collection (admin SDK only, locked out from client). `generateStream` is capped at 10 req/min; `highlevelProxy` at 60 req/min. Fail-open on Firestore errors to avoid blocking legitimate traffic.
 
 ---
 
 ## What I Would Improve
 
-1. **Monaco + Sandpack hybrid** — Use Sandpack for preview so generated Vue SFCs can be previewed with a real build pipeline, not just vanilla HTML.
-2. **Streaming JSON parsing** — Parse file operations incrementally during streaming so the file tree updates live instead of waiting for generation to complete.
+1. **Monaco + Sandpack hybrid** — Use Sandpack for preview so generated Vue SFCs can be previewed with a real build pipeline, not just vanilla HTML+JS.
+2. **Streaming JSON parsing** — Parse file operations incrementally during streaming so the file tree updates live instead of waiting for the full Anthropic response to accumulate.
 3. **Webhook support** — Allow generated apps to register HL webhooks (new contact, appointment booked) for real-time reactive dashboards.
-4. **Multi-turn context window** — Include full conversation history in LLM context for better iterative refinement across many turns.
-5. **Rate limiting** — Add per-user rate limiting on `generateStream` to prevent runaway API costs.
+4. **Delta snapshots** — Store file diffs instead of full file copies per snapshot to reduce Firestore storage for large projects with many iterations.
+5. **Workspace collaboration** — Multi-user project sharing with Firestore security rules scoped to a shared `memberIds` array rather than a single `userId`.
 
 ---
 
 ## Deployment
 
 ```bash
+# Build functions
+cd functions && npm run build && cd ..
+
 # Build frontend
 cd frontend && npm run build && cd ..
 
@@ -152,16 +158,13 @@ firebase functions:secrets:set ANTHROPIC_API_KEY
 firebase functions:secrets:set HIGHLEVEL_CLIENT_SECRET
 firebase functions:secrets:set HIGHLEVEL_CLIENT_ID
 firebase functions:secrets:set HIGHLEVEL_REDIRECT_URI
+firebase functions:secrets:set FRONTEND_URL
+firebase functions:secrets:set FUNCTIONS_BASE_URL
+# Optional: HuggingFace fallback
+firebase functions:secrets:set HF_TOKEN
 ```
 
-Then reference in functions code:
-
-```typescript
-// functions/src/index.ts
-exports.generateStream = functions
-  .runWith({ secrets: ['ANTHROPIC_API_KEY', 'HIGHLEVEL_CLIENT_SECRET', 'HIGHLEVEL_CLIENT_ID'] })
-  ...
-```
+Secrets are declared via `firebase-functions/params` (`defineSecret`) in `functions/src/secrets.ts` and injected at deploy time — never committed to source.
 
 ---
 
@@ -169,28 +172,39 @@ exports.generateStream = functions
 
 ```
 genesis/
+├── docs/                   # Docs
+|
 ├── frontend/               # Vue 3 SPA
 │   └── src/
 │       ├── components/
-│       │   ├── ui/         # Button, Input, Badge, Card
+│       │   ├── ui/         # Button, Input, Badge, Card, Label (ShadCN-based)
 │       │   ├── dashboard/  # CreateProjectDialog
-│       │   └── workspace/  # ChatPanel, CodeEditor, FileTree, PreviewPanel, SnapshotDrawer
+│       │   └── workspace/  # ChatPanel, CodeEditor, FileTree, PreviewPanel,
+│       │                   # SnapshotDrawer, DiffView
 │       ├── stores/         # auth, highlevel, projects, workspace (Pinia)
 │       ├── views/          # Login, Signup, Dashboard, Workspace, OAuthCallback
-│       ├── services/       # firebase.ts
+│       ├── services/       # firebase.ts — app + Firestore + Auth init
 │       ├── router/         # index.ts with auth guards
-│       └── types/          # index.ts — all TypeScript types
+│       └── types/          # index.ts — all TypeScript types + SSEEvent union
 │
-├── functions/src/          # Firebase Cloud Functions
-│   ├── highlevel/          # oauth.ts, client.ts, proxy.ts, contacts/convos/calendars
-│   ├── generation/         # index.ts (SSE stream), prompt.ts, parser.ts
-│   ├── projects/           # CRUD
+├── functions/src/          # Firebase Cloud Functions (Node 20, TypeScript)
+│   ├── highlevel/          # oauth.ts, client.ts, proxy.ts, contacts.ts,
+│   │                       # conversations.ts, calendars.ts, dummy.ts
+│   ├── generation/         # index.ts (SSE stream + LLM orchestration),
+│   │                       # prompt.ts (system prompt builder),
+│   │                       # parser.ts (6-strategy LLM response parser)
+│   ├── projects/           # CRUD — list, create, update, soft-delete
 │   ├── files/              # list, get, save
-│   ├── snapshots/          # list, restore, createSnapshot
-│   └── auth/               # middleware.ts
+│   ├── snapshots/          # list, restore, createSnapshot (internal helper)
+│   ├── auth/               # middleware.ts — verifyAuth
+│   ├── rateLimit.ts        # Firestore sliding-window rate limiter
+│   ├── secrets.ts          # Firebase Secret Manager param declarations
+│   ├── cors.ts             # CORS middleware
+│   ├── admin.ts            # firebase-admin init (db, auth exports)
+│   └── index.ts            # Function export entry point
 │
-├── firestore.rules
-├── firestore.indexes.json
-├── firebase.json
-└── .env.example
+├── firestore.rules         # Security rules — user-scoped ownership checks
+├── firestore.indexes.json  # Composite indexes for ordered queries
+├── firebase.json           # Hosting rewrites + emulator config
+└── .env.example            # All required environment variables
 ```

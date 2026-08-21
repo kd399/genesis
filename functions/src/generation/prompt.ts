@@ -199,16 +199,6 @@ hlFetch('conversations', { limit: 20 }).then(function(data) {
       return fetch(url.toString(), { headers: { 'Authorization': 'Bearer ' + tok } })
         .then(function(r) { if (!r.ok) throw new Error('API error ' + r.status); return r.json(); })
         .then(function(data) {
-          if (data.isDummy) {
-            var existing = document.getElementById('__genesis_demo_banner__');
-            if (!existing) {
-              var b = document.createElement('div');
-              b.id = '__genesis_demo_banner__';
-              b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:8px 12px;font-size:12px;font-family:sans-serif;letter-spacing:0.01em;';
-              b.textContent = '🔮 Demo Mode — showing sample CRM data. Connect HighLevel in the dashboard to use live data.';
-              document.body.prepend(b);
-            }
-          }
           return data;
         });
     };
