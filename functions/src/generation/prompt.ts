@@ -259,10 +259,60 @@ For each file to write:
 ...raw file content here...
 <<<END_FILE>>>
 
-To delete a file:
+IMPORTANT:
+- The opening delimiter MUST begin with exactly THREE "<" characters: <<<
+- The closing delimiter MUST end with exactly THREE ">" characters: >>>
+- "FILE:" MUST be uppercase.
+- "END_FILE" MUST be uppercase.
+- There MUST be no markdown code fence around the file.
+- The file content must be RAW content, not JSON-escaped content.
+- Do NOT add any text before the first <<<FILE:
+- Do NOT add any text after the final <<<END_FILE>>>
+
+### EXAMPLE
+
+<<<FILE:index.html>>>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>My App</title>
+</head>
+<body>
+  <h1>Hello</h1>
+</body>
+</html>
+<<<END_FILE>>>
+
+<<<FILE:app.js>>>
+console.log("Hello");
+<<<END_FILE>>>
+
+### DELETE FILE
+
+To delete a file, use EXACTLY:
+
 <<<DELETE:filename.ext>>>
 
-Start your response immediately with <<<FILE: — no preamble, no summary after.`
+Do not put any other content inside a DELETE block.
+
+### FINAL VALIDATION — DO THIS BEFORE RESPONDING
+
+Before generating your final response, verify:
+
+1. The response starts with exactly <<<FILE: or <<<DELETE:
+2. Every file has an opening <<< delimiter.
+3. Every file has a closing <<<END_FILE>>> delimiter.
+4. Every opening delimiter contains exactly three "<" characters.
+5. Every closing delimiter contains exactly three ">" characters.
+6. There is NO prose outside the file blocks.
+7. There are NO markdown code fences.
+8. There is NO JSON.
+9. There is NO explanation before or after the file blocks.
+
+If any of these conditions are not satisfied, FIX THE OUTPUT before returning it.
+
+START YOUR RESPONSE IMMEDIATELY WITH <<<FILE: OR <<<DELETE:
+`
 }
 
 function buildJsonFormatInstructions(): string {

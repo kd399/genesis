@@ -8,6 +8,7 @@ import { parseLLMResponse, type FileOperation } from './parser'
 import { createSnapshot } from '../snapshots'
 import { InferenceClient } from '@huggingface/inference'
 import { setCors } from '../cors'
+import { checkRateLimit, RATE_LIMITS } from '../rateLimit'
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────
 
@@ -141,6 +142,18 @@ export const generateStream = functions
     try {
       // ── Auth ──────────────────────────────────────────────────────────────
       const uid = await verifyAuth(req)
+
+      // ── Rate limiting ─────────────────────────────────────────────────────
+      const rl = await checkRateLimit(uid, 'generateStream', RATE_LIMITS.generateStream)
+      if (!rl.allowed) {
+        const resetSec = Math.ceil((rl.resetMs - Date.now()) / 1000)
+        sendSSE(res, 'error', {
+          type: 'error',
+          message: `Rate limit exceeded. Try again in ${resetSec}s (max ${RATE_LIMITS.generateStream.maxRequests} generations/min).`
+        })
+        res.end()
+        return
+      }
 
       // Accept both POST body and query params
       const body = (req.body ?? {}) as Record<string, string>

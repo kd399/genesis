@@ -2,6 +2,7 @@ import * as functions from 'firebase-functions'
 import { verifyAuth } from '../auth/middleware'
 import { db } from '../admin'
 import { setCors } from '../cors'
+import { checkRateLimit, RATE_LIMITS } from '../rateLimit'
 import { listContacts } from './contacts'
 import { listConversations } from './conversations'
 import { getAppointments, listCalendars } from './calendars'
@@ -23,6 +24,18 @@ export const highlevelProxy = functions.https.onRequest(async (req, res) => {
   // ── Normal path ───────────────────────────────────────────────────────────
   try {
     const uid = await verifyAuth(req)
+
+    // ── Rate limiting ──────────────────────────────────────────────────────
+    const rl = await checkRateLimit(uid, 'highlevelProxy', RATE_LIMITS.highlevelProxy)
+    if (!rl.allowed) {
+      const resetSec = Math.ceil((rl.resetMs - Date.now()) / 1000)
+      res.status(429).json({
+        error: `Rate limit exceeded. Try again in ${resetSec}s.`,
+        retryAfter: resetSec
+      })
+      return
+    }
+
     const resource = req.query.resource as string
 
     if (!resource) {

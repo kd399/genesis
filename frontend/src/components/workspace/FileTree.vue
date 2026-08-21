@@ -84,14 +84,14 @@ async function handleRestore(snapshotId: string) {
   <div class="h-full flex flex-col">
 
     <!-- ── FILES section ───────────────────────────────────────── -->
-    <div class="px-3 py-2 border-b flex items-center justify-between shrink-0">
+    <div class="px-3 py-2 border-b flex items-center justify-between shrink-0 bg-muted/30" style="height: 36px;">
       <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Files</span>
       <span v-if="ws.files.length > 0" class="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
         {{ ws.files.length }}
       </span>
     </div>
 
-    <div class="flex-1 overflow-y-auto py-1 min-h-0">
+    <div class="flex-1 overflow-y-auto py-1 min-h-0 bg-muted/30">
       <!-- Empty state -->
       <div v-if="ws.files.length === 0 && !isStreaming" class="px-3 py-6 text-center">
         <div class="text-2xl mb-2">📂</div>
@@ -123,7 +123,7 @@ async function handleRestore(snapshotId: string) {
     </div>
 
     <!-- ── SNAPSHOTS section ───────────────────────────────────── -->
-    <div class="border-t shrink-0">
+    <div class="border-t shrink-0 bg-muted/30">
       <!-- Collapsible header -->
       <button
         class="w-full px-3 py-2 flex items-center justify-between hover:bg-muted/40 transition-colors"

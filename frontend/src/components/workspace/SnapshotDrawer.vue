@@ -1,16 +1,26 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useWorkspaceStore } from '@/stores/workspace'
+import Sheet from '@/components/ui/Sheet.vue'
 import Button from '@/components/ui/Button.vue'
+import Separator from '@/components/ui/Separator.vue'
 import { formatDate } from '@/lib/utils'
+import { RotateCcw, Clock } from 'lucide-vue-next'
 
-const emit = defineEmits<{ close: [] }>()
+interface Props {
+  open: boolean
+}
+
+defineProps<Props>()
+const emit = defineEmits<{
+  'update:open': [value: boolean]
+}>()
+
 const ws = useWorkspaceStore()
 const restoringId = ref<string | null>(null)
 const isLoading = ref(false)
 
 onMounted(async () => {
-  // Always refetch when drawer opens so we show latest snapshots
   isLoading.value = true
   try {
     await ws.fetchSnapshots()
@@ -23,72 +33,74 @@ async function handleRestore(snapshotId: string) {
   restoringId.value = snapshotId
   try {
     await ws.restoreSnapshot(snapshotId)
+    emit('update:open', false)
   } finally {
     restoringId.value = null
-    emit('close')
   }
 }
 </script>
 
 <template>
-  <!-- Backdrop -->
-  <div class="fixed inset-0 z-50 flex">
-    <div class="absolute inset-0 bg-black/40" @click="emit('close')" />
+  <Sheet
+    :open="open"
+    side="right"
+    title="Snapshot History"
+    description="Each generation creates a restorable point-in-time snapshot of all project files."
+    class="w-80 sm:max-w-80 p-0 flex flex-col"
+    @update:open="emit('update:open', $event)"
+  >
+    <!-- header slot keeps default title/description, we just add padding -->
+    <template #header>
+      <div class="px-6 pt-6 pb-4">
+        <div class="flex items-center gap-2 mb-1">
+          <Clock class="w-4 h-4 text-primary" />
+          <h2 class="text-lg font-semibold">Snapshot History</h2>
+        </div>
+        <p class="text-sm text-muted-foreground">
+          Each generation creates a restorable snapshot.
+        </p>
+      </div>
+      <Separator />
+    </template>
 
-    <!-- Drawer from right -->
-    <div class="relative ml-auto z-10 w-80 h-full bg-background border-l flex flex-col">
-      <div class="flex items-center justify-between px-4 py-3 border-b">
-        <h2 class="font-semibold text-sm">Snapshot History</h2>
-        <button class="text-muted-foreground hover:text-foreground" @click="emit('close')">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
-        </button>
+    <!-- Body -->
+    <div class="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+      <!-- Loading -->
+      <div v-if="isLoading" class="flex items-center justify-center py-12">
+        <div class="w-5 h-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
       </div>
 
-      <div class="flex-1 overflow-y-auto p-4 space-y-3">
-        <!-- Loading state -->
-        <div v-if="isLoading" class="flex items-center justify-center py-10">
-          <div class="w-5 h-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      <!-- Empty -->
+      <div
+        v-else-if="ws.snapshots.length === 0"
+        class="flex flex-col items-center justify-center py-12 text-center"
+      >
+        <div class="w-10 h-10 rounded-full bg-muted flex items-center justify-center mb-3">
+          <Clock class="w-5 h-5 text-muted-foreground" />
         </div>
+        <p class="text-sm font-medium">No snapshots yet</p>
+        <p class="text-xs text-muted-foreground mt-1">Generate an app to create your first snapshot</p>
+      </div>
 
-        <div v-else-if="ws.snapshots.length === 0" class="text-center py-8 text-muted-foreground">
-          <svg
-            class="w-8 h-8 mx-auto mb-2 opacity-40"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p class="text-xs">No snapshots yet</p>
-          <p class="text-xs opacity-70 mt-1">Each generation creates a restorable snapshot</p>
-        </div>
-
-        <template v-else>
+      <!-- Snapshot list -->
+      <template v-else>
         <div
           v-for="(snap, i) in ws.snapshots"
           :key="snap.id"
-          class="border rounded-lg p-3 space-y-2 hover:border-primary/40 transition-colors"
+          class="rounded-lg border bg-card p-3 space-y-3 hover:border-primary/40 transition-colors"
         >
           <div class="flex items-start justify-between gap-2">
-            <div>
-              <p class="text-xs font-medium">Generation #{{ ws.snapshots.length - i }}</p>
+            <div class="min-w-0">
+              <p class="text-sm font-medium">Generation #{{ ws.snapshots.length - i }}</p>
               <p class="text-xs text-muted-foreground mt-0.5">
-                {{ snap.createdAt ? formatDate(snap.createdAt.toDate ? snap.createdAt.toDate() : snap.createdAt) : 'Just now' }}
+                {{
+                  snap.createdAt
+                    ? formatDate(snap.createdAt.toDate ? snap.createdAt.toDate() : snap.createdAt)
+                    : 'Just now'
+                }}
               </p>
             </div>
-            <span class="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+            <span class="shrink-0 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
               {{ (snap as any).filesCount ?? '?' }} files
             </span>
           </div>
@@ -96,23 +108,15 @@ async function handleRestore(snapshotId: string) {
           <Button
             size="sm"
             variant="outline"
-            class="w-full text-xs h-7"
+            class="w-full h-8 text-xs gap-1.5"
             :loading="restoringId === snap.id"
             @click="handleRestore(snap.id)"
           >
-            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"
-              />
-            </svg>
+            <RotateCcw v-if="restoringId !== snap.id" class="w-3 h-3" />
             Restore
           </Button>
         </div>
-        </template>
-      </div>
+      </template>
     </div>
-  </div>
+  </Sheet>
 </template>

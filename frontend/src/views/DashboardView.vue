@@ -170,7 +170,7 @@ function openProject(id: string) {
   <CreateProjectDialog
     v-if="showCreateDialog"
     :location-id="hlStore.locationId ?? ''"
-    @close="showCreateDialog = false"
+    @update:open="showCreateDialog = $event"
     @created="p => { showCreateDialog = false; openProject(p.id) }"
   />
 </template>

@@ -46,15 +46,58 @@ const srcdoc = computed((): string | null => {
     }
   })
 
-  // Inject a tiny pre-bootstrap that sets proxy URL aliases BEFORE the generated app's bootstrap.
-  // The generated app's bootstrap (from prompt.ts) handles all token listening & hlFetch setup.
-  // We keep this minimal to avoid duplicate event listeners or variable conflicts.
+  // Inject a full bootstrap into EVERY preview — this guarantees hlFetch is defined
+  // and the auth-token postMessage is handled even when the LLM forgets to include
+  // the bootstrap script in its generated code.
   const bootstrap = `
 <script>
 (function() {
-  // Proxy URL available under both names for any generated code
-  window.__GENESIS_PROXY__ = '${FUNCTIONS_BASE}/highlevelProxy';
-  window.__proxyBase    = '${FUNCTIONS_BASE}/highlevelProxy';
+  var __token = null;
+  var __proxyBase = '${FUNCTIONS_BASE}/highlevelProxy';
+  window.__GENESIS_PROXY__ = __proxyBase;
+  window.__proxyBase = __proxyBase;
+  var __ready = false;
+
+  function triggerReady(token) {
+    __token = token;
+    window.__GENESIS_TOKEN__ = token;
+    if (!__ready) {
+      __ready = true;
+      setTimeout(function() {
+        if (typeof window.onGenesisReady === 'function') window.onGenesisReady();
+      }, 0);
+    }
+  }
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'auth-token') triggerReady(e.data.token);
+  });
+  window.addEventListener('genesis-ready', function(e) {
+    if (e.detail && e.detail.token) triggerReady(e.detail.token);
+  });
+
+  window.hlFetch = function(resource, params) {
+    var tok = __token || window.__GENESIS_TOKEN__;
+    if (!tok) return Promise.reject(new Error('Genesis: not authenticated yet'));
+    var url = new URL(__proxyBase);
+    url.searchParams.set('resource', resource);
+    if (params) Object.keys(params).forEach(function(k) { url.searchParams.set(k, String(params[k])); });
+    return fetch(url.toString(), { headers: { 'Authorization': 'Bearer ' + tok } })
+      .then(function(r) { if (!r.ok) throw new Error('API error ' + r.status); return r.json(); })
+      .then(function(data) {
+        if (data.isDummy) {
+          var existing = document.getElementById('__genesis_demo_banner__');
+          if (!existing) {
+            var b = document.createElement('div');
+            b.id = '__genesis_demo_banner__';
+            b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#f97316;color:#fff;text-align:center;padding:8px 12px;font-size:12px;font-family:sans-serif;';
+            b.textContent = '\u{1F52E} Demo Mode \u2014 showing sample CRM data. Connect HighLevel to use live data.';
+            document.body && document.body.prepend(b);
+          }
+        }
+        return data;
+      });
+  };
 })();
 <\/script>`
 
@@ -164,7 +207,7 @@ async function openInNewTab() {
         </div>
       </div>
       <div class="flex items-center gap-1">
-        <button
+        <!-- <button
           v-if="hasPreview"
           class="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           title="Open in new tab"
@@ -174,7 +217,7 @@ async function openInNewTab() {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
-        </button>
+        </button> -->
         <button
           v-if="hasPreview"
           class="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"

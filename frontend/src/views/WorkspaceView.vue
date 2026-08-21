@@ -11,6 +11,8 @@ import FileTree from '@/components/workspace/FileTree.vue'
 import CodeEditor from '@/components/workspace/CodeEditor.vue'
 import PreviewPanel from '@/components/workspace/PreviewPanel.vue'
 import Badge from '@/components/ui/Badge.vue'
+import SnapshotDrawer from '@/components/workspace/SnapshotDrawer.vue'
+import DiffView from '@/components/workspace/DiffView.vue'
 import type { Project } from '@/types'
 
 const route = useRoute()
@@ -22,6 +24,7 @@ const ws = useWorkspaceStore()
 const project = ref<Project | null>(null)
 const loading = ref(true)
 
+const showSnapshots = ref(false)
 const showChat    = ref(true)
 const showPreview = ref(true)
 const previewFullscreen = ref(false)
@@ -156,6 +159,40 @@ onUnmounted(() => {
             </svg>
           </button>
 
+          <!-- Snapshot History -->
+          <button
+            :class="[
+              'p-1.5 rounded text-xs transition-colors',
+              showSnapshots ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
+            ]"
+            title="Snapshot history"
+            @click="showSnapshots = !showSnapshots"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+
+          <!-- Diff View — only shown when diff data exists -->
+          <button
+            v-if="ws.diffView.diffs.length > 0"
+            :class="[
+              'p-1.5 rounded text-xs transition-colors relative',
+              ws.diffView.isOpen ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+            ]"
+            title="Show diff"
+            @click="ws.diffView.isOpen ? ws.closeDiffView() : (ws.diffView.isOpen = true)"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            <span class="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-primary text-primary-foreground text-[8px] flex items-center justify-center font-bold">
+              {{ ws.diffView.diffs.length }}
+            </span>
+          </button>
+
         </div>
       </header>
 
@@ -196,4 +233,13 @@ onUnmounted(() => {
       </div>
     </template>
   </div>
+
+  <!-- Diff View -->
+  <DiffView />
+
+  <!-- Snapshot Drawer -->
+  <SnapshotDrawer
+    :open="showSnapshots"
+    @update:open="showSnapshots = $event"
+  />
 </template>

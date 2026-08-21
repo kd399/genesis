@@ -9,7 +9,9 @@ import type {
   Snapshot,
   GenerationState,
   SSEEvent,
-  ChatActivity
+  ChatActivity,
+  DiffViewState,
+  FileDiff
 } from '@/types'
 
 const FUNCTIONS_BASE = import.meta.env.DEV
@@ -33,6 +35,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const streamingFileContents = ref<Record<string, string>>({}) // path -> content being streamed
   const activeStreamFile = ref<string | null>(null)
 
+  // Diff view state — shows what changed in the last generation
+  const diffView = ref<DiffViewState>({
+    isOpen: false,
+    generationId: null,
+    diffs: [],
+    selectedPath: null
+  })
+
   // The local "in-progress" assistant message id (shown while generating)
   const inProgressMsgId = ref<string | null>(null)
   // Epoch ms when current generation started — used to ignore pre-existing remote assistant msgs
@@ -41,6 +51,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   let filesUnsub: (() => void) | null = null
   let messagesUnsub: (() => void) | null = null
   let abortController: AbortController | null = null
+  let filesBeforeGeneration: { path: string; content: string }[] = []
 
   const activeFile = computed(() => files.value.find(f => f.path === activeFilePath.value) ?? null)
 
@@ -175,6 +186,50 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     })
   }
 
+  /** Compute diffs between previous file set and current file set */
+  function computeDiffs(
+    before: { path: string; content: string }[],
+    after: { path: string; content: string }[],
+    generationId: string
+  ) {
+    const beforeMap = new Map(before.map(f => [f.path, f.content]))
+    const afterMap = new Map(after.map(f => [f.path, f.content]))
+    const allPaths = new Set([...beforeMap.keys(), ...afterMap.keys()])
+
+    const diffs: FileDiff[] = []
+    allPaths.forEach(path => {
+      const b = beforeMap.get(path) ?? ''
+      const a = afterMap.get(path) ?? ''
+      if (!beforeMap.has(path)) {
+        diffs.push({ path, status: 'added', before: '', after: a })
+      } else if (!afterMap.has(path)) {
+        diffs.push({ path, status: 'deleted', before: b, after: '' })
+      } else if (b !== a) {
+        diffs.push({ path, status: 'modified', before: b, after: a })
+      }
+      // unchanged files intentionally excluded — not useful to show
+    })
+
+    // Sort: added first, then modified, then deleted
+    const order = { added: 0, modified: 1, deleted: 2, unchanged: 3 }
+    diffs.sort((a, b) => order[a.status] - order[b.status] || a.path.localeCompare(b.path))
+
+    diffView.value = {
+      isOpen: diffs.length > 0,
+      generationId,
+      diffs,
+      selectedPath: diffs[0]?.path ?? null
+    }
+  }
+
+  function closeDiffView() {
+    diffView.value = { ...diffView.value, isOpen: false }
+  }
+
+  function selectDiffFile(path: string) {
+    diffView.value = { ...diffView.value, selectedPath: path }
+  }
+
   async function generate(prompt: string) {
     if (!projectId.value || generationState.value.isGenerating) return
 
@@ -187,6 +242,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     streamingFileContents.value = {}
     activeStreamFile.value = null
     abortController = new AbortController()
+
+    // Snapshot current files BEFORE generation to compute diff afterward
+    filesBeforeGeneration = files.value.map(f => ({ path: f.path, content: f.content }))
 
     // 1) Add user message immediately (local + Firestore)
     const userMsg: Message = {
@@ -359,6 +417,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         if (files.value.find(f => f.path === 'index.html')) {
           activeFilePath.value = 'index.html'
         }
+        // Compute diff — use streamed file contents since Firestore may not have updated yet
+        const filesAfter = [
+          ...files.value
+            .filter(f => !streamingFileContents.value[f.path])
+            .map(f => ({ path: f.path, content: f.content })),
+          ...Object.entries(streamingFileContents.value).map(([path, content]) => ({
+            path,
+            content
+          }))
+        ]
+        // Skip diff on first generation — nothing to compare against
+        if (filesBeforeGeneration.length > 0) {
+          computeDiffs(filesBeforeGeneration, filesAfter, event.generationId)
+        }
         break
       }
 
@@ -420,6 +492,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     generate,
     abortGeneration,
     restoreSnapshot,
-    fetchSnapshots
+    fetchSnapshots,
+    diffView,
+    closeDiffView,
+    selectDiffFile
   }
 })

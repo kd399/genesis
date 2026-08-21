@@ -160,3 +160,19 @@ export interface GenerationState {
   status: string
   error: string | null
 }
+
+// ─── Diff View ───────────────────────────────────────────────────────────────
+
+export interface FileDiff {
+  path: string
+  status: 'added' | 'modified' | 'deleted' | 'unchanged'
+  before: string // content before generation (empty if added)
+  after: string // content after generation (empty if deleted)
+}
+
+export interface DiffViewState {
+  isOpen: boolean
+  generationId: string | null
+  diffs: FileDiff[]
+  selectedPath: string | null
+}
